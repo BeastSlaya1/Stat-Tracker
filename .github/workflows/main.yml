@@ -1,0 +1,89 @@
+name: Deploy web build to GitHub Pages
+
+# Why this exists: a phone opening the web build always needs SOMETHING
+# serving it over http(s) — that's just how browsers work, not a
+# limitation specific to this app. The previous run_web_lan*.bat scripts
+# make *this computer* that something, which only works while the PC is
+# on, awake, and running the script, and only for phones on the same
+# WiFi. GitHub Pages is a free, always-on static host instead: once this
+# workflow runs, the site lives at a permanent https:// URL that any
+# phone (or anyone else) can open directly, anytime, on any network — no
+# PC, no LAN, nothing else needs to be running.
+#
+# One-time setup after pushing this repo to GitHub:
+#   1. Repo Settings → Pages → Source → set to "GitHub Actions".
+#   2. Push to the "main" branch (or run this workflow manually from the
+#      Actions tab) — it builds the web app and publishes it.
+#   3. The Actions tab (or Settings → Pages) will show the live URL,
+#      something like: https://<your-username>.github.io/<repo-name>/
+#      Open that directly on an iPhone or Android phone's browser —
+#      that's the whole point, no other device required.
+#
+# Every future push to "main" re-deploys automatically. flet build web
+# uses Flutter under the hood (same as building for Windows/Android), so
+# this installs the Flutter SDK on the runner the same way it would need
+# to be installed on a dev machine — nothing to install locally for this
+# specific workflow, GitHub's runner does it.
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch: {}   # lets you also trigger a rebuild manually from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+
+      - name: Install Flet build tooling
+        run: pip install "flet[all]==0.86.5"
+
+      # --base-url matters specifically for GitHub Pages: the site is
+      # served from https://<username>.github.io/<repo-name>/ (a
+      # subpath), not the domain root, so every asset URL the built app
+      # requests needs that repo-name prefix or they'll all 404. Using
+      # github.event.repository.name here means this always matches
+      # whatever this repo is actually named, with nothing to hardcode
+      # or keep in sync by hand if it's ever renamed.
+      - name: Build web app
+        run: flet build web --project "Stat Tracker" --base-url "${{ github.event.repository.name }}"
+
+      # GitHub Pages runs everything through Jekyll by default, which
+      # ignores/mishandles some of the files flet build web produces —
+      # .nojekyll turns that off so the site is served byte-for-byte as
+      # flet built it.
+      - name: Disable Jekyll processing
+        run: touch build/web/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
