@@ -3253,57 +3253,73 @@ class StatTrackerApp:
             if last_init_error is not None:
                 raise last_init_error
             self._native_camera_ready = True
-            self._full_refresh()
+            self.camera_error = None
 
-            # Self-test: briefly stream frames (regardless of mode) to
-            # confirm the camera pipeline genuinely works end to end.
-            # start_image_stream() specifically gets retried a couple of
-            # times on failure — the exact same class of "not initialized
-            # yet" race as above can also hit this call even after
-            # initialize() itself returned successfully, since the
-            # underlying native setup can still be settling.
-            frames_before = self._native_frame_count
-            last_stream_error = None
-            for attempt in range(3):
-                try:
-                    await cam.start_image_stream()
-                    last_stream_error = None
-                    break
-                except Exception as ex:
-                    last_stream_error = ex
-                    print(f"[NativeCamera] start_image_stream attempt {attempt+1} failed: {ex}")
-                    await asyncio.sleep(0.5)
-            if last_stream_error is not None:
-                raise last_stream_error
-            await asyncio.sleep(4)
-            frames_arrived = self.camera_on and self._native_frame_count != frames_before
+            # Deliberately NOT running the frame-streaming self-test here
+            # anymore (it used to call start_image_stream(), wait ~4s,
+            # and check a frame counter). That call is what actually
+            # triggers flet-camera's on_stream_image event pipeline —
+            # and that pipeline is where a genuine upstream bug in
+            # flet-camera 0.86.5 lives: decoding a streamed frame's event
+            # payload throws
+            #   TypeError: Instance of 'minified:...': type
+            #   'minified:...' is not a subtype of type 'minified:...'
+            # inside the plugin's own compiled Dart/JS code — a real
+            # Optional[Enum]-field type-cast bug of the same well-known
+            # class Flet itself has shipped fixes for elsewhere (e.g. a
+            # near-identical "type 'List<dynamic>' is not a subtype of
+            # type 'List<String?>?'" crash in GestureDetector, fixed in a
+            # later flet release). It's not something this app's own code
+            # can work around — it happens inside flet-camera's compiled
+            # plugin code, before our Python event handler ever runs, on
+            # BOTH web and Android identically (confirmed via browser
+            # DevTools console output — same crash text on both, which is
+            # what pointed at this rather than yet another timing race).
+            #
+            # The actual live preview (preview_enabled=True on the
+            # control, in _ensure_native_camera_ctrl) does NOT go through
+            # this event pipeline at all — it's the native platform's own
+            # rendered view. Inputter Mode only ever needed the frame
+            # stream for this now-removed self-test, so simply not
+            # starting it here sidesteps the bug entirely for the normal
+            # "watch the live camera while logging stats" use case.
+            #
+            # Camera Mode (broadcasting frames to another device over
+            # MJPEG) is a genuine exception: it actually needs frame
+            # bytes, not just a preview, so it still has to call
+            # start_image_stream() below and will still hit this same
+            # upstream bug until flet-camera ships a fix.
+            self._full_refresh()
 
             if self.app_mode == "camera":
-                # Camera Mode broadcaster — frame bytes are genuinely
-                # needed continuously, to serve over the MJPEG server, so
-                # the stream stays running either way (the same "no
-                # frames after 4s" diagnostic below still applies to it).
-                pass
-            else:
-                # Inputter Mode only needed the stream for this self-test
-                # — hand continuous display back to the native preview
-                # surface (full native frame rate, no per-frame Python
-                # round-trip) now that we know whether it can be trusted.
-                try:
-                    await cam.stop_image_stream()
-                except Exception as ex:
-                    print(f"[NativeCamera] stop_image_stream after self-test failed: {ex}")
-
-            if self.camera_on and not frames_arrived:
-                self.camera_error = (
-                    "Camera initialized but no video frames arrived after 4s. "
-                    "This points to a device/OS-level camera streaming issue rather "
-                    "than an app bug — check Settings → Apps → Stat Tracker → "
-                    "Permissions → Camera is set to \"Allow\" (not \"Ask every time\"), "
-                    "and that no other app currently has the camera open.")
-            elif self.camera_on:
-                self.camera_error = None
-            self._full_refresh()
+                # Retried a few times since a transient timing issue is
+                # still possible on top of the deeper bug above; if it's
+                # the deeper bug, retrying won't help, but this at least
+                # surfaces a clear, honest error instead of the cryptic
+                # minified TypeError, so it's obvious what's actually
+                # wrong rather than looking like a new app bug to chase.
+                last_stream_error = None
+                for attempt in range(3):
+                    try:
+                        await cam.start_image_stream()
+                        last_stream_error = None
+                        break
+                    except Exception as ex:
+                        last_stream_error = ex
+                        print(f"[NativeCamera] start_image_stream attempt {attempt+1} failed: {ex}")
+                        await asyncio.sleep(0.5)
+                if last_stream_error is not None:
+                    if "not a subtype" in str(last_stream_error):
+                        self.camera_error = (
+                            "Camera Mode's frame streaming hit a known bug in the "
+                            "flet-camera plugin itself (a type-decoding error in its "
+                            "compiled code, not this app) — the live local preview works "
+                            "fine, but broadcasting frames to another device currently "
+                            "doesn't on this platform. Use a wireless/IP camera URL "
+                            "instead for Camera Mode until flet-camera ships a fix.")
+                    else:
+                        self.camera_error = f"Could not start frame streaming: {last_stream_error}"
+                    self._full_refresh()
         except Exception as ex:
             self.camera_error = f"Could not start native camera: {ex}"
             self.camera_on = False
