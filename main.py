@@ -30,6 +30,22 @@ except ImportError:
     ftc = None
     HAS_FLET_CAMERA = False
 
+# Built-in/browser camera (the "This Device's Camera" button, via
+# flet-camera) is temporarily disabled — flet-camera 0.86.5 has a
+# systemic bug in its own compiled event-handling code (confirmed via
+# browser DevTools: identical "TypeError: ... is not a subtype of type
+# ..." crashes from initialize, pause_preview, AND frame streaming alike,
+# plus a 10s platform-channel timeout once the plugin gets into that
+# state) that makes it unreliable on both Android and web right now.
+# This is one flag rather than ripping the feature out entirely: flip it
+# back to True (and re-check flet-camera's changelog for a fix first —
+# https://github.com/flet-dev/flet/releases) once a corrected version is
+# available, and the whole feature — code, UI, everything — comes back
+# with no further changes needed. Wireless/IP camera (a phone running
+# Camera Mode, or any IP-camera app) is unaffected and remains the
+# reliable path on every platform in the meantime.
+NATIVE_CAMERA_ENABLED = False
+
 BG       = "#020617"
 SURFACE  = "#0f172a"
 SURFACE2 = "#0a0f1e"
@@ -528,7 +544,18 @@ class StatTrackerApp:
         # flet-camera *is* now installed there instead, since it supports
         # browser camera access (getUserMedia) the same way it supports
         # Android/iOS — see the native: branch in _start_camera.
-        self.camera_source = "native:back" if (self.is_mobile or self.is_web) else 0
+        # "native:back" (browser/on-device camera via flet-camera) is
+        # DISABLED as a default for now — see the long comment on
+        # HAS_FLET_CAMERA / _build_web_camera_source_picker below for
+        # why: a systemic bug in flet-camera 0.86.5's own compiled event
+        # handling (confirmed via browser DevTools showing it break on
+        # initialize, pause_preview, AND frame streaming — not just one
+        # isolated call) makes the whole plugin currently unreliable on
+        # both Android and web. Wireless/IP camera (0, meaning "no local
+        # source, use the URL field") is the one path that's been solid
+        # throughout, so it's the default everywhere now, same as
+        # desktop always was.
+        self.camera_source = 0
         self.mobile_camera_lens = "back"  # "back" or "front" — mirrors camera_source on mobile
         self.detected_cameras: list = []  # list of confirmed-working device indices, filled by _detect_cameras
         self.camera_scanning = False
@@ -1723,6 +1750,8 @@ class StatTrackerApp:
         if there's no literal "back" match, so this works the same
         whether the visitor has one webcam or several."""
         def _use_builtin(_):
+            if not NATIVE_CAMERA_ENABLED:
+                return
             self.camera_source = "native:back"
             if self.camera_on:
                 self._stop_camera(); self._start_camera()
@@ -1730,19 +1759,27 @@ class StatTrackerApp:
                 self._start_camera()
 
         builtin_btn = ft.Container(
-            content=ft.Row([ft.Icon(ft.Icons.VIDEOCAM, size=13,
-                                     color=TEXT if self.camera_source == "native:back" else MUTED),
-                             ft.Text("This Device's Camera", size=10,
-                                     color=TEXT if self.camera_source == "native:back" else MUTED,
+            content=ft.Row([ft.Icon(ft.Icons.VIDEOCAM_OFF if not NATIVE_CAMERA_ENABLED else ft.Icons.VIDEOCAM,
+                                     size=13,
+                                     color=MUTED if not NATIVE_CAMERA_ENABLED
+                                           else (TEXT if self.camera_source == "native:back" else MUTED)),
+                             ft.Text("This Device's Camera (temporarily unavailable)"
+                                     if not NATIVE_CAMERA_ENABLED else "This Device's Camera", size=10,
+                                     color=MUTED if not NATIVE_CAMERA_ENABLED
+                                           else (TEXT if self.camera_source == "native:back" else MUTED),
                                      weight=ft.FontWeight.BOLD)], spacing=5),
-            bgcolor=INDIGO6 + "cc" if self.camera_source == "native:back" else SURFACE2,
-            border=ft.Border.all(1, INDIGO4 + "66" if self.camera_source == "native:back" else BORDER),
+            bgcolor=SURFACE2 if (not NATIVE_CAMERA_ENABLED or self.camera_source != "native:back") else INDIGO6 + "cc",
+            border=ft.Border.all(1, BORDER if (not NATIVE_CAMERA_ENABLED or self.camera_source != "native:back") else INDIGO4 + "66"),
             border_radius=6, padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-            on_click=_use_builtin, ink=True)
+            on_click=_use_builtin if NATIVE_CAMERA_ENABLED else None,
+            ink=NATIVE_CAMERA_ENABLED, opacity=0.55 if not NATIVE_CAMERA_ENABLED else 1.0)
 
         status_line = (
             txt("Native camera support isn't installed in this build.", size=9, color=ROSE)
             if not HAS_FLET_CAMERA else
+            txt("Temporarily disabled — known bug in the flet-camera plugin itself. "
+                "Use a wireless/IP camera URL below instead for now.", size=9, color=AMBER)
+            if not NATIVE_CAMERA_ENABLED else
             txt("Uses your browser's own camera permission prompt — allow access when asked.",
                 size=9, color=MUTED2))
 
@@ -1762,6 +1799,8 @@ class StatTrackerApp:
         identically here."""
         def _use_lens(lens):
             def _click(_):
+                if not NATIVE_CAMERA_ENABLED:
+                    return
                 self.mobile_camera_lens = lens
                 self.camera_source = f"native:{lens}"
                 if self.camera_on:
@@ -1771,19 +1810,24 @@ class StatTrackerApp:
             return _click
 
         def lens_chip(lens, label, icon):
-            active = self.mobile_camera_lens == lens
+            active = NATIVE_CAMERA_ENABLED and self.mobile_camera_lens == lens
             return ft.Container(
-                content=ft.Row([ft.Icon(icon, size=13, color=TEXT if active else MUTED),
-                                 ft.Text(label, size=10, color=TEXT if active else MUTED,
+                content=ft.Row([ft.Icon(icon, size=13, color=MUTED if not NATIVE_CAMERA_ENABLED else (TEXT if active else MUTED)),
+                                 ft.Text(label, size=10, color=MUTED if not NATIVE_CAMERA_ENABLED else (TEXT if active else MUTED),
                                          weight=ft.FontWeight.BOLD)], spacing=5),
-                bgcolor=INDIGO6 + "cc" if active else SURFACE2,
-                border=ft.Border.all(1, INDIGO4 + "66" if active else BORDER),
+                bgcolor=SURFACE2 if (not NATIVE_CAMERA_ENABLED or not active) else INDIGO6 + "cc",
+                border=ft.Border.all(1, BORDER if (not NATIVE_CAMERA_ENABLED or not active) else INDIGO4 + "66"),
                 border_radius=6, padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-                on_click=_use_lens(lens), ink=True)
+                on_click=_use_lens(lens) if NATIVE_CAMERA_ENABLED else None,
+                ink=NATIVE_CAMERA_ENABLED, opacity=0.55 if not NATIVE_CAMERA_ENABLED else 1.0)
 
         status_line = (
             txt("Native camera support isn't installed in this build.", size=9, color=ROSE)
             if not HAS_FLET_CAMERA else
+            txt("Temporarily unavailable — known bug in the flet-camera plugin itself "
+                "(same on Android and web). Use a wireless/IP camera URL below instead "
+                "for now.", size=9, color=AMBER)
+            if not NATIVE_CAMERA_ENABLED else
             txt("Using this device's own camera — no separate setup needed.", size=9, color=MUTED2))
 
         return ft.Column([
@@ -3018,6 +3062,12 @@ class StatTrackerApp:
         # "native:" source actually reaches this branch instead of being
         # rejected by it.
         if isinstance(source, str) and source.startswith("native:"):
+            if not NATIVE_CAMERA_ENABLED:
+                self.camera_error = ("This device's built-in camera is temporarily disabled "
+                                      "due to a known bug in the flet-camera plugin itself — "
+                                      "use a wireless/IP camera URL instead for now.")
+                self.camera_on = False
+                self._full_refresh(); return
             if not HAS_FLET_CAMERA:
                 self.camera_error = ("Native camera support isn't installed in this build. "
                                       "Add 'flet-camera' to requirements.txt and rebuild the app.")
@@ -3238,11 +3288,28 @@ class StatTrackerApp:
             _INIT_BACKOFFS = (0.4, 0.8, 1.2, 1.8, 2.4)
             for attempt, backoff in enumerate(_INIT_BACKOFFS):
                 try:
+                    # Passing only the two truly required arguments here
+                    # (description, resolution_preset) as an experiment:
+                    # enable_audio and image_format_group are both
+                    # Optional-typed fields on the native side, and the
+                    # "not a subtype" crash pattern seen in DevTools
+                    # matches known Optional/enum-field decoding bugs in
+                    # Flet's plugin event/argument marshaling elsewhere
+                    # (see the GestureDetector.allowed_devices bug fixed
+                    # in a later flet release, same error shape). Worth
+                    # testing whether NOT setting them at all — letting
+                    # the plugin fall back to its own internal defaults
+                    # rather than us sending explicit values for them —
+                    # avoids whatever specific code path is crashing.
+                    # image_format_group=JPEG in particular was there to
+                    # make Camera Mode's frame bytes arrive pre-encoded,
+                    # so if this does turn out to be the fix, Camera
+                    # Mode's frames may need re-encoding client-side
+                    # instead — a real trade-off to revisit once this is
+                    # confirmed either way, not free either way.
                     await cam.initialize(
                         description=desc,
                         resolution_preset=ftc.ResolutionPreset.MEDIUM,
-                        enable_audio=False,
-                        image_format_group=ftc.ImageFormatGroup.JPEG,
                     )
                     last_init_error = None
                     break
@@ -3382,9 +3449,18 @@ class StatTrackerApp:
     def _on_native_camera_frame(self, e):
         """flet-camera on_stream_image handler — only actually running
         (see _start_native_camera_async) when Camera Mode needs frame
-        bytes to serve over HTTP. Fires with an already-JPEG-encoded frame
-        (image_format_group=JPEG), so there's no per-frame OpenCV work
-        needed at all on mobile."""
+        bytes to serve over HTTP. Previously assumed JPEG-encoded bytes
+        (image_format_group=JPEG was set explicitly in initialize()) —
+        that argument was removed as part of testing whether it was
+        involved in the "not a subtype" crash (see the comment at the
+        initialize() call), so frames may now arrive in the platform's
+        own raw default format (BGRA8888/NV21/etc.) instead of
+        pre-encoded JPEG. If Camera Mode's broadcast image looks corrupt
+        rather than just failing outright, that's why — this would need
+        actual JPEG re-encoding here (e.g. via a small canvas/JS bridge
+        on web, or a native decode step) rather than the direct
+        base64-of-raw-bytes below, which only ever worked because the
+        bytes really were JPEG already."""
         try:
             raw = e.bytes
             self._latest_jpeg_frame = raw
