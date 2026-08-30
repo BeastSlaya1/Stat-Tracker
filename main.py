@@ -30,21 +30,39 @@ except ImportError:
     ftc = None
     HAS_FLET_CAMERA = False
 
-# Built-in/browser camera (the "This Device's Camera" button, via
-# flet-camera) is temporarily disabled — flet-camera 0.86.5 has a
-# systemic bug in its own compiled event-handling code (confirmed via
-# browser DevTools: identical "TypeError: ... is not a subtype of type
-# ..." crashes from initialize, pause_preview, AND frame streaming alike,
-# plus a 10s platform-channel timeout once the plugin gets into that
-# state) that makes it unreliable on both Android and web right now.
-# This is one flag rather than ripping the feature out entirely: flip it
-# back to True (and re-check flet-camera's changelog for a fix first —
-# https://github.com/flet-dev/flet/releases) once a corrected version is
-# available, and the whole feature — code, UI, everything — comes back
-# with no further changes needed. Wireless/IP camera (a phone running
-# Camera Mode, or any IP-camera app) is unaffected and remains the
-# reliable path on every platform in the meantime.
-NATIVE_CAMERA_ENABLED = False
+# This project's own custom Flet extension (packages/stc_camera_preview)
+# — a smooth live camera preview built entirely in Dart, with only a
+# single plain-string property crossing into Python. Built specifically
+# to sidestep a confirmed bug in Flet's own core SDK's marshaling of
+# complex types (Enums, dataclasses) — see
+# packages/stc_camera_preview/stc_camera_preview/camera_preview.py for
+# the full story. Also optional-import for the same reason as
+# flet_camera above (desktop doesn't need or ship it).
+try:
+    import stc_camera_preview as stcam
+    HAS_STC_CAMERA_PREVIEW = True
+except ImportError:
+    stcam = None
+    HAS_STC_CAMERA_PREVIEW = False
+
+# Built-in/browser camera (the "This Device's Camera" button) now splits
+# across two mechanisms doing two different jobs:
+#   - Inputter Mode's local live view: stc_camera_preview (this project's
+#     own custom extension, above) — genuine native/browser frame rate,
+#     nothing routed through flet-camera's continuous-event pipeline at
+#     all.
+#   - Camera Mode's broadcast frames (needs actual bytes, to serve over
+#     MJPEG to another device): flet-camera's take_picture(), polled
+#     repeatedly — see _native_camera_takepicture_poll_loop. Confirmed
+#     working on its own (a previous version of this app used it
+#     successfully) since it sends zero arguments and returns plain
+#     bytes, unlike the continuous-preview/streaming paths that hit the
+#     bug described above.
+# NATIVE_CAMERA_ENABLED is kept as a single kill-switch in case a
+# specific device/browser still can't get either working — flip to
+# False to fall back to wireless/IP camera only, which is unaffected
+# either way.
+NATIVE_CAMERA_ENABLED = True
 
 BG       = "#020617"
 SURFACE  = "#0f172a"
@@ -565,6 +583,7 @@ class StatTrackerApp:
         self._auto_camera_scan_done = False     # ensures the local-device auto-scan below only fires once per session
         self._auto_wireless_scan_done = False   # same, for the wireless auto-discovery listen
         self._native_camera_ctrl = None   # lazily-created flet_camera.Camera instance
+        self._stc_preview_ctrl = None     # lazily-created stc_camera_preview.StcCameraPreview instance
         self._native_camera_ready = False
         self._native_camera_busy = False  # guards against overlapping start/stop
                                            # operations on the same native camera
@@ -3068,13 +3087,37 @@ class StatTrackerApp:
                                       "use a wireless/IP camera URL instead for now.")
                 self.camera_on = False
                 self._full_refresh(); return
+            lens = source.split(":", 1)[1]
+
+            # Inputter Mode: prefer stc_camera_preview (this project's own
+            # custom Dart extension — see its module docstring for why)
+            # for a genuinely smooth native/browser-frame-rate live view,
+            # with zero Python involvement per frame. Nothing async to
+            # kick off here at all — the Dart side handles camera
+            # selection/initialization entirely on its own the moment the
+            # control is actually shown (see _video_display_widget),
+            # triggered just by _full_refresh() below placing it in the
+            # tree/updating its "lens" property.
+            if self.app_mode != "camera" and HAS_STC_CAMERA_PREVIEW:
+                self.camera_on = True; self.camera_error = None
+                self._camera_capture_stop.clear()
+                self._ensure_stc_preview_ctrl().lens = lens
+                self._full_refresh(); return
+
+            # Camera Mode (needs actual frame bytes to broadcast, not
+            # just a preview) — or Inputter Mode falling back because
+            # stc_camera_preview isn't available in this build for some
+            # reason — uses flet-camera's take_picture(), polled
+            # repeatedly. See _native_camera_takepicture_poll_loop's
+            # docstring for why take_picture() specifically (confirmed
+            # working, unlike flet-camera's continuous-preview/streaming
+            # path).
             if not HAS_FLET_CAMERA:
                 self.camera_error = ("Native camera support isn't installed in this build. "
                                       "Add 'flet-camera' to requirements.txt and rebuild the app.")
                 self._full_refresh(); return
             self.camera_on = True; self.camera_error = None
             self._camera_capture_stop.clear()
-            lens = source.split(":", 1)[1]
             # Create the control synchronously so the video panel (built by
             # the _full_refresh() call right below) can already reference
             # it via _video_display_widget() on this very first render,
@@ -3175,28 +3218,33 @@ class StatTrackerApp:
         self._full_refresh()
 
     async def _start_native_camera_async(self, lens: str):
-        """Initialize the native Android/iOS camera (flet-camera) for the
-        requested lens ("back"/"front"). The live view itself is the
-        native GPU-rendered preview surface (preview_enabled=True on the
-        control created in _ensure_native_camera_ctrl) — that renders at
-        the device's actual native frame rate with zero Python involved
-        per frame, which is the fix for the ~1fps Android video: the
-        previous version routed every single frame through a Python
-        callback + base64 encode + a full client update just to display
-        it locally, which this bridge simply can't do at 30-60fps.
+        """Initialize the native Android/iOS/Web camera (flet-camera) for
+        the requested lens ("back"/"front"), then poll take_picture()
+        repeatedly to build the live view — a real photo roughly every
+        0.5s rather than smooth continuous video.
 
-        Regardless of app mode, frame streaming is started briefly here
-        purely as a self-test: it's the only way to actually confirm
-        real frames are flowing (permissions genuinely granted, hardware
-        actually accessible, no other app holding the camera) — the
-        native preview surface has no equivalent signal at all, it just
-        silently shows nothing if something's wrong, which is exactly
-        what was happening with zero error message before this. In
-        Camera Mode the stream stays running afterward (frame bytes are
-        genuinely needed there, to serve over the MJPEG server); in
-        Inputter Mode it's stopped right after confirming frames arrived,
-        handing continuous display back to the native preview surface —
-        so the self-test doesn't cost Inputter Mode any frame rate."""
+        This replaced relying on the native preview surface
+        (preview_enabled=True) and continuous frame streaming
+        (start_image_stream()/on_stream_image): both of those go through
+        flet-camera 0.86.5's continuous-event pipeline, which has a
+        confirmed upstream bug — decoding a streamed frame or a preview
+        state-change event throws
+            TypeError: Instance of 'minified:...': type 'minified:...'
+            is not a subtype of type 'minified:...'
+        inside the plugin's own compiled Dart/JS code, on both Android
+        and Web identically (confirmed via browser DevTools). A previous
+        version of this app used take_picture() (a single photo capture)
+        successfully — take_picture() sends and receives a far simpler
+        payload than the continuous paths (no arguments going in, plain
+        bytes coming back — see flet-camera's camera.py), which lines up
+        with why that worked while streaming didn't: the bug looks tied
+        to the richer continuous-event payloads specifically, not to
+        initialize() or capture in general. Polling it repeatedly here
+        gets a live-feeling view without touching that code path at all,
+        for both Inputter Mode's local view and Camera Mode's broadcast
+        frames — both now share the exact same polling loop and the same
+        self._latest_jpeg_frame buffer, unlike before where they used two
+        different mechanisms."""
         # Wait for any in-flight start/stop on the native camera to
         # genuinely finish first — see _native_camera_busy's definition
         # for why this specific race matters (a Dart-side
@@ -3235,6 +3283,54 @@ class StatTrackerApp:
                 await asyncio.sleep(step)
                 waited += step
         return False
+
+    async def _native_camera_takepicture_poll_loop(self, cam):
+        """Runs for as long as self.camera_on stays True and
+        self.camera_source is still this native camera — calls
+        take_picture() repeatedly and feeds each shot into
+        self.camera_image / self._latest_jpeg_frame, the same buffer
+        every other camera source (desktop OpenCV, wireless/IP camera)
+        already uses. Stopped via self._camera_capture_stop, the same
+        stop-event every other capture loop in this app already checks
+        (see _camera_capture_loop for the cv2 equivalent) — _stop_camera
+        sets it.
+
+        ~0.5s between shots: take_picture() on real camera hardware
+        typically takes noticeably longer than a streamed frame grab
+        (device-dependent — often 200-500ms just for the shutter/encode
+        round-trip), so polling much faster than this would mostly just
+        queue up redundant in-flight requests rather than genuinely
+        increase the feed's smoothness."""
+        import asyncio
+        first_error_shown = False
+        while self.camera_on and not self._camera_capture_stop.is_set():
+            if not (isinstance(self.camera_source, str)
+                    and self.camera_source.startswith("native:")):
+                break  # source changed out from under this loop — stop quietly
+            try:
+                raw = await cam.take_picture()
+                self._latest_jpeg_frame = raw
+                self._native_frame_count += 1
+                b64 = base64.b64encode(raw).decode("ascii")
+                self.camera_image.src = f"data:image/jpeg;base64,{b64}"
+                self.camera_image.update()
+                if self.camera_error is not None:
+                    self.camera_error = None
+                    self._full_refresh()
+            except Exception as ex:
+                print(f"[NativeCamera] take_picture failed: {type(ex).__name__}: {ex}")
+                if not first_error_shown:
+                    # Shown once rather than every failed poll — a
+                    # transient single failure (camera briefly busy,
+                    # etc.) shouldn't flash an error the person then has
+                    # to dismiss; only worth surfacing if it's clearly
+                    # persistent (still happening a few seconds later).
+                    first_error_shown = True
+                else:
+                    self.camera_error = f"Camera capture failing: {ex}"
+                    self._full_refresh()
+                    break
+            await asyncio.sleep(0.5)
 
     async def _start_native_camera_inner(self, lens: str):
         try:
@@ -3275,38 +3371,14 @@ class StatTrackerApp:
             # first-ever launch) the system camera-permission dialog
             # pausing the app's own rendering while it's shown, the
             # settling time needed can genuinely run past what's covered
-            # above. start_image_stream() already had a retry loop for
-            # exactly this class of error further down; initialize()
-            # itself didn't, which is what let "Camera is not
-            # initialized. Call initialize() first." through even though
-            # initialize() was the very call that raised it. 5 attempts
-            # with growing backoff (up to ~6s total) gives real headroom
-            # for the permission-dialog case specifically, where the
-            # delay isn't fixed — it's "however long the user takes to
-            # tap Allow".
+            # above. 5 attempts with growing backoff (up to ~6s total)
+            # gives real headroom for the permission-dialog case
+            # specifically, where the delay isn't fixed — it's "however
+            # long the user takes to tap Allow".
             last_init_error = None
             _INIT_BACKOFFS = (0.4, 0.8, 1.2, 1.8, 2.4)
             for attempt, backoff in enumerate(_INIT_BACKOFFS):
                 try:
-                    # Passing only the two truly required arguments here
-                    # (description, resolution_preset) as an experiment:
-                    # enable_audio and image_format_group are both
-                    # Optional-typed fields on the native side, and the
-                    # "not a subtype" crash pattern seen in DevTools
-                    # matches known Optional/enum-field decoding bugs in
-                    # Flet's plugin event/argument marshaling elsewhere
-                    # (see the GestureDetector.allowed_devices bug fixed
-                    # in a later flet release, same error shape). Worth
-                    # testing whether NOT setting them at all — letting
-                    # the plugin fall back to its own internal defaults
-                    # rather than us sending explicit values for them —
-                    # avoids whatever specific code path is crashing.
-                    # image_format_group=JPEG in particular was there to
-                    # make Camera Mode's frame bytes arrive pre-encoded,
-                    # so if this does turn out to be the fix, Camera
-                    # Mode's frames may need re-encoding client-side
-                    # instead — a real trade-off to revisit once this is
-                    # confirmed either way, not free either way.
                     await cam.initialize(
                         description=desc,
                         resolution_preset=ftc.ResolutionPreset.MEDIUM,
@@ -3321,146 +3393,102 @@ class StatTrackerApp:
                 raise last_init_error
             self._native_camera_ready = True
             self.camera_error = None
-
-            # Deliberately NOT running the frame-streaming self-test here
-            # anymore (it used to call start_image_stream(), wait ~4s,
-            # and check a frame counter). That call is what actually
-            # triggers flet-camera's on_stream_image event pipeline —
-            # and that pipeline is where a genuine upstream bug in
-            # flet-camera 0.86.5 lives: decoding a streamed frame's event
-            # payload throws
-            #   TypeError: Instance of 'minified:...': type
-            #   'minified:...' is not a subtype of type 'minified:...'
-            # inside the plugin's own compiled Dart/JS code — a real
-            # Optional[Enum]-field type-cast bug of the same well-known
-            # class Flet itself has shipped fixes for elsewhere (e.g. a
-            # near-identical "type 'List<dynamic>' is not a subtype of
-            # type 'List<String?>?'" crash in GestureDetector, fixed in a
-            # later flet release). It's not something this app's own code
-            # can work around — it happens inside flet-camera's compiled
-            # plugin code, before our Python event handler ever runs, on
-            # BOTH web and Android identically (confirmed via browser
-            # DevTools console output — same crash text on both, which is
-            # what pointed at this rather than yet another timing race).
-            #
-            # The actual live preview (preview_enabled=True on the
-            # control, in _ensure_native_camera_ctrl) does NOT go through
-            # this event pipeline at all — it's the native platform's own
-            # rendered view. Inputter Mode only ever needed the frame
-            # stream for this now-removed self-test, so simply not
-            # starting it here sidesteps the bug entirely for the normal
-            # "watch the live camera while logging stats" use case.
-            #
-            # Camera Mode (broadcasting frames to another device over
-            # MJPEG) is a genuine exception: it actually needs frame
-            # bytes, not just a preview, so it still has to call
-            # start_image_stream() below and will still hit this same
-            # upstream bug until flet-camera ships a fix.
             self._full_refresh()
 
-            if self.app_mode == "camera":
-                # Retried a few times since a transient timing issue is
-                # still possible on top of the deeper bug above; if it's
-                # the deeper bug, retrying won't help, but this at least
-                # surfaces a clear, honest error instead of the cryptic
-                # minified TypeError, so it's obvious what's actually
-                # wrong rather than looking like a new app bug to chase.
-                last_stream_error = None
-                for attempt in range(3):
-                    try:
-                        await cam.start_image_stream()
-                        last_stream_error = None
-                        break
-                    except Exception as ex:
-                        last_stream_error = ex
-                        print(f"[NativeCamera] start_image_stream attempt {attempt+1} failed: {ex}")
-                        await asyncio.sleep(0.5)
-                if last_stream_error is not None:
-                    if "not a subtype" in str(last_stream_error):
-                        self.camera_error = (
-                            "Camera Mode's frame streaming hit a known bug in the "
-                            "flet-camera plugin itself (a type-decoding error in its "
-                            "compiled code, not this app) — the live local preview works "
-                            "fine, but broadcasting frames to another device currently "
-                            "doesn't on this platform. Use a wireless/IP camera URL "
-                            "instead for Camera Mode until flet-camera ships a fix.")
-                    else:
-                        self.camera_error = f"Could not start frame streaming: {last_stream_error}"
-                    self._full_refresh()
+            # Both Inputter Mode's local view and Camera Mode's broadcast
+            # frames now come from the exact same take_picture()-polling
+            # loop — see _native_camera_takepicture_poll_loop's docstring
+            # for why (avoids flet-camera 0.86.5's continuous-streaming
+            # bug entirely). Camera Mode's MJPEG server already reads
+            # from self._latest_jpeg_frame, which this loop keeps
+            # updated, so no separate wiring is needed for that mode.
+            self.page.run_task(self._native_camera_takepicture_poll_loop, cam)
         except Exception as ex:
             self.camera_error = f"Could not start native camera: {ex}"
             self.camera_on = False
             self._native_camera_ready = False
             self._full_refresh()
 
+    def _ensure_stc_preview_ctrl(self):
+        """Lazily create this project's own custom camera preview control
+        (see packages/stc_camera_preview) — a smooth live view built
+        entirely in Dart, unlike flet-camera's own preview/streaming
+        path. No overlay-mounting dance needed the way
+        _ensure_native_camera_ctrl() requires: this control isn't driven
+        by imperative invoke_method calls at all, just a plain "lens"
+        property, so it initializes itself the moment
+        _video_display_widget() actually places it in the visible tree —
+        ordinary Flet control property diffing handles the rest, the
+        same as any other control's properties."""
+        if self._stc_preview_ctrl is None:
+            self._stc_preview_ctrl = stcam.StcCameraPreview(
+                lens="back", expand=True, on_error=self._on_stc_preview_error)
+        return self._stc_preview_ctrl
+
+    def _on_stc_preview_error(self, e):
+        """stc_camera_preview's on_error — e.data is a plain string (see
+        that control's docstring for why: no structured/typed error
+        object, deliberately)."""
+        msg = getattr(e, "data", None) or "Unknown camera error."
+        self.camera_error = f"Could not start native camera: {msg}"
+        self.camera_on = False
+        self._full_refresh()
+
     def _ensure_native_camera_ctrl(self):
-        """Lazily create the flet-camera control, with the native preview
-        enabled so it can be placed directly into the video panel (see
-        _video_display_widget) and rendered by the platform itself —
-        no Python frame round-trip for the visual feed at all.
+        """Lazily create the flet-camera control. preview_enabled=False
+        and on_stream_image is no longer wired up — both of those are
+        exactly the continuous-event code paths hitting flet-camera
+        0.86.5's marshaling bug (see _start_native_camera_async for the
+        full explanation). This control now exists purely to hold the
+        initialize()/take_picture() platform-channel connection; the
+        actual visible feed is built entirely in Python from periodic
+        take_picture() calls, same as every other camera source in this
+        app (desktop OpenCV, wireless/IP camera).
 
-        expand=True is required here: Camera is a LayoutControl with
-        width/height both defaulting to None (no imposed size at all), so
-        without it the control has no defined bounds inside its parent
-        Container and renders as an empty/grey area even though
-        initialization succeeds with no error — exactly the "camera turns
-        on, no error, just a grey screen" symptom.
-
-        In Camera Mode, _video_display_widget() deliberately shows
-        self.camera_image instead of this control (Camera Mode needs
-        frame *bytes* to serve over HTTP, not the native texture) — which
-        means this control is never otherwise placed anywhere in the page
-        at all for that mode. Flet requires a control to actually be
-        mounted in the page before platform-channel calls (initialize(),
-        get_available_cameras(), etc.) work on it — without this, Camera
-        Mode raised exactly "Control must be added to the page first."
-        Inputter Mode already gets this control mounted for free via
-        _video_display_widget() placing it in the visible tree, so it's
-        only added to page.overlay here for Camera Mode specifically,
-        avoiding mounting the same control in two places at once."""
+        Always mounted into page.overlay (not just for Camera Mode like
+        before) since it's never placed directly in the visible video
+        panel anymore either way — Flet requires a control to be mounted
+        into the page before platform-channel calls (initialize(),
+        get_available_cameras(), take_picture(), etc.) work on it at
+        all; without this, calls fail with "Control must be added to the
+        page first.\""""
         if self._native_camera_ctrl is None:
-            self._native_camera_ctrl = ftc.Camera(
-                preview_enabled=True,
-                expand=True,
-                on_stream_image=self._on_native_camera_frame,
-            )
-            if self.app_mode == "camera":
-                self.page.overlay.append(self._native_camera_ctrl)
-                self.page.update()
+            self._native_camera_ctrl = ftc.Camera(preview_enabled=False)
+            self.page.overlay.append(self._native_camera_ctrl)
+            self.page.update()
         return self._native_camera_ctrl
 
     def _video_display_widget(self):
-        """What to place in the video panel's Container. On mobile or web,
-        while viewing the local native/browser camera in Inputter Mode
-        (i.e. not also needing to serve frames to another device), this is
-        the native camera control itself — a real platform-rendered (or
-        browser-rendered, on web) preview running at full frame rate.
-        Every other case (desktop OpenCV, wireless/IP camera URL, or
-        Camera Mode where self.camera_image is being actively fed by the
-        byte stream for broadcasting) uses the regular self.camera_image,
-        exactly as before."""
-        if ((self.is_mobile or self.is_web) and self.camera_on and self.app_mode != "camera"
+        """What to place in the video panel's Container.
+
+        Inputter Mode viewing the native/browser camera specifically
+        shows stc_camera_preview — this project's own custom Dart
+        extension (see packages/stc_camera_preview) — for genuine native
+        frame rate, zero Python involvement per frame. This is the one
+        real exception to "always self.camera_image": that control
+        renders itself directly (a live Dart-side CameraPreview widget),
+        the same way flet-camera's own native preview used to before its
+        continuous-event bug was found.
+
+        Every other case — desktop OpenCV, wireless/IP camera URL, or
+        Camera Mode (which needs frame *bytes* to broadcast over MJPEG,
+        not just a preview, so it still uses flet-camera's take_picture()
+        polling loop feeding self.camera_image) — uses the regular
+        self.camera_image, same as before."""
+        if (self.camera_on and self.app_mode != "camera"
                 and isinstance(self.camera_source, str)
                 and self.camera_source.startswith("native:")
-                and self._native_camera_ctrl is not None):
-            return self._native_camera_ctrl
+                and HAS_STC_CAMERA_PREVIEW
+                and self._stc_preview_ctrl is not None):
+            return self._stc_preview_ctrl
         return self.camera_image
 
     def _on_native_camera_frame(self, e):
-        """flet-camera on_stream_image handler — only actually running
-        (see _start_native_camera_async) when Camera Mode needs frame
-        bytes to serve over HTTP. Previously assumed JPEG-encoded bytes
-        (image_format_group=JPEG was set explicitly in initialize()) —
-        that argument was removed as part of testing whether it was
-        involved in the "not a subtype" crash (see the comment at the
-        initialize() call), so frames may now arrive in the platform's
-        own raw default format (BGRA8888/NV21/etc.) instead of
-        pre-encoded JPEG. If Camera Mode's broadcast image looks corrupt
-        rather than just failing outright, that's why — this would need
-        actual JPEG re-encoding here (e.g. via a small canvas/JS bridge
-        on web, or a native decode step) rather than the direct
-        base64-of-raw-bytes below, which only ever worked because the
-        bytes really were JPEG already."""
+        """flet-camera on_stream_image handler — no longer wired up to
+        anything (see _start_native_camera_async for why: this event
+        pipeline is exactly what's hitting flet-camera 0.86.5's
+        marshaling bug). Left in place only in case a future flet-camera
+        release fixes streaming and this becomes worth re-enabling."""
         try:
             raw = e.bytes
             self._latest_jpeg_frame = raw
@@ -3551,18 +3579,25 @@ class StatTrackerApp:
                     wait_iterations += 1
                 self._native_camera_busy = True
                 try:
-                    # Only stop the image stream if it was actually started
-                    # (Camera Mode) — Inputter Mode's local view never starts
-                    # one (see _start_native_camera_async), so calling
-                    # stop_image_stream() unconditionally would just log a
-                    # harmless "nothing to stop" error every time.
-                    if self.app_mode == "camera":
-                        try: await self._native_camera_ctrl.stop_image_stream()
-                        except Exception as ex:
-                            print(f"[NativeCamera] stop_image_stream: {type(ex).__name__}: {ex}")
-                    try: await self._native_camera_ctrl.pause_preview()
-                    except Exception as ex:
-                        print(f"[NativeCamera] pause_preview: {type(ex).__name__}: {ex}")
+                    # No stream/preview to explicitly stop anymore — the
+                    # take_picture()-polling loop
+                    # (_native_camera_takepicture_poll_loop) already exits
+                    # on its own as soon as it sees
+                    # self._camera_capture_stop set (above) or
+                    # self.camera_on go False, and there's no continuous
+                    # stream or native preview surface running in the
+                    # background to separately tear down anymore (see
+                    # _ensure_native_camera_ctrl / _start_native_camera_async
+                    # for why: both preview_enabled and
+                    # start_image_stream()/on_stream_image were removed
+                    # entirely, since they're what hit flet-camera 0.86.5's
+                    # marshaling bug). This used to call
+                    # stop_image_stream() and pause_preview() here, which
+                    # is exactly what was producing the confusing
+                    # "pause_preview: Camera is not initialized" log spam
+                    # seen in DevTools — calls into a pipeline that was
+                    # never healthy to begin with.
+                    pass
                 finally:
                     self._native_camera_busy = False
             try:

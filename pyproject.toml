@@ -15,17 +15,39 @@ dependencies = [
     "flet==0.86.5",
 ]
 
-# Android/iOS: native on-device camera via flet-camera. No OpenCV here —
-# opencv-python has no Android wheel anyway, so it would only ever be dead
-# weight (or a failed install) on this target.
+# Android/iOS: native on-device camera. Two packages doing two different
+# jobs now — flet-camera (published, take_picture() only — Camera Mode's
+# frame-broadcasting) and stc-camera-preview (this project's own custom
+# extension living in packages/stc_camera_preview — Inputter Mode's
+# smooth live local view). See stc_camera_preview/camera_preview.py for
+# the full story on why flet-camera's own continuous-preview/streaming
+# path had to be replaced rather than just fixed in this app's code —
+# short version: a confirmed bug in Flet's own core SDK's Python<->Dart
+# marshaling of complex types (Enums, dataclasses), not in flet-camera's
+# code, which take_picture()'s all-primitive-types call sidesteps but a
+# genuinely smooth live preview can't without moving that entirely onto
+# the Dart side, which is what this custom extension does.
+#
+# stc-camera-preview's actual location comes from [tool.flet.dev_packages]
+# below, not a "@ file:..." suffix here — flet build's dependency-install
+# step runs from a build\flutter\ staging folder, not this project's root,
+# so a "file:./packages/..." reference (relative to the wrong directory at
+# install time) fails with "No such file or directory:
+# ...\build\flutter\packages\stc_camera_preview" — flet_cli's own
+# dev_packages mechanism exists specifically to solve this: it resolves
+# the path relative to the actual project root itself, correctly,
+# regardless of where the install step's own working directory happens to
+# be.
 [tool.flet.android]
 dependencies = [
     "flet-camera==0.86.5",
+    "stc-camera-preview",
 ]
 
 [tool.flet.ios]
 dependencies = [
     "flet-camera==0.86.5",
+    "stc-camera-preview",
 ]
 
 # Desktop: local webcam capture via OpenCV (see main.py _start_cv2_camera).
@@ -59,13 +81,23 @@ dependencies = [
 
 # Web build: the desktop OpenCV path still doesn't apply (no camera is
 # attached to the server, and opencv-python has no browser/WASM build
-# anyway), but flet-camera *does* work here — its Camera control talks to
-# the browser's own getUserMedia API on web, the same way it talks to the
-# native Android/iOS camera APIs on mobile (see Camera.before_update() in
-# the flet-camera package itself, which explicitly allows page.web).
-# That's what lets the web build offer "use this device's camera" as well
-# as the wireless/IP-camera MJPEG path.
+# anyway). Two camera packages here for two different jobs, same as
+# Android/iOS above — flet-camera (take_picture() only, for Camera
+# Mode's broadcasting) and this project's own stc-camera-preview (smooth
+# local live view, Inputter Mode). The official `camera` Flutter package
+# stc-camera-preview is built on has its own web-specific implementation
+# (camera_web) that Flutter resolves automatically for a web build —
+# nothing extra needed here for that.
 [tool.flet.web]
 dependencies = [
     "flet-camera==0.86.5",
+    "stc-camera-preview",
 ]
+
+# The actual on-disk location of stc-camera-preview (see the comment
+# above [tool.flet.android]) — one shared mapping since it's the same
+# path for every platform that uses it. flet_cli resolves this path
+# relative to the project root correctly, unlike the "@ file:./..."
+# syntax that was here before.
+[tool.flet.dev_packages]
+"stc-camera-preview" = "packages/stc_camera_preview"

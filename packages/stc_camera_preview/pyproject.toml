@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stc-camera-preview"
+version = "0.1.0"
+description = "Stat Tracker's minimal live camera preview control (custom Flet extension)."
+requires-python = ">=3.10"
+dependencies = [
+    "flet==0.86.5",
+]
+
+# Structured identically to flet-camera's own published wheel (Python
+# package + a top-level "flutter/" directory bundled alongside it) — see
+# flet-camera-0.86.5.dist-info/RECORD, which lists both "flet_camera" and
+# "flutter" as top-level entries. flet build's own packaging step
+# (register_flutter_extensions in flet_cli) specifically looks for
+# exactly this shape — a "flutter/<name>/pubspec.yaml" sitting alongside
+# the installed Python package — to auto-discover custom controls.
+[tool.setuptools]
+packages = ["stc_camera_preview", "flutter", "flutter.stc_camera_preview"]
+
+[tool.setuptools.package-data]
+"flutter.stc_camera_preview" = ["**/*"]
