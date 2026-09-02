@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flet/flet.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show DeviceOrientation;
 
 /// A deliberately minimal live camera preview control.
 ///
@@ -129,23 +128,26 @@ class _StcCameraPreviewControlState extends State<StcCameraPreviewControl> {
       // arguments at all — CameraController's constructor here is
       // plain Dart, entirely on this side of the bridge, so none of
       // this crosses into the marshaling layer that's actually broken.
-      // ResolutionPreset.high (not .medium) is a Dart-side literal,
-      // never sent from Python — the whole point. Bumped up from medium
-      // after a side-by-side comparison against the phone's own camera
-      // app showed medium looking noticeably blurrier — medium is
-      // roughly 480p-class on most devices, well below what the phone's
-      // sensor is actually capable of. high asks for something closer
-      // to 720p/1080p-class depending on the device, without going all
-      // the way to veryHigh/max, which would push closer to the
-      // sensor's full resolution and cost more in decode/render work
-      // for a live preview that's redrawn continuously — high is a
-      // reasonable middle ground for "watch this while logging stats"
-      // rather than "record broadcast-quality footage". If it's still
-      // not sharp enough after this, veryHigh is the next step up to
-      // try.
+      // ResolutionPreset.veryHigh (not .medium, and not .high either
+      // now) is a Dart-side literal, never sent from Python — the whole
+      // point. Bumped up twice: medium -> high after the first
+      // side-by-side comparison against the phone's own camera app
+      // showed medium looking noticeably blurrier (medium is roughly
+      // 480p-class on most devices), then high -> veryHigh after a
+      // second comparison showed high still visibly softer than the
+      // phone's own camera app, with the difference described as not
+      // being explained by the device's own hardware capability —
+      // veryHigh asks for something close to the sensor's actual
+      // resolution (device-dependent, often 1080p+), trading a bit more
+      // decode/render cost for a live preview that's redrawn
+      // continuously in exchange for real sharpness. If it's still not
+      // sharp enough after this, ResolutionPreset.max is the last step
+      // up (full native sensor resolution) — but that's a meaningfully
+      // heavier cost for a continuously-redrawn preview, worth trying
+      // only if veryHigh genuinely isn't enough.
       final controller = CameraController(
         description,
-        ResolutionPreset.high,
+        ResolutionPreset.veryHigh,
         enableAudio: false,
       );
       await controller.initialize();
@@ -182,12 +184,31 @@ class _StcCameraPreviewControlState extends State<StcCameraPreviewControl> {
       // physically rotating. CameraController is itself a
       // ValueNotifier<CameraValue>, and (since camera plugin ^0.12.0)
       // automatically listens for the OS's own orientation-change
-      // events and updates value.deviceOrientation accordingly — that
-      // update is what this listens for, so a rotation is what actually
-      // triggers a fresh call to _buildOrientedPreview below.
+      // events — that update is what this listens for, so a rotation is
+      // what actually triggers a fresh rebuild of CameraPreview below.
+      //
+      // Deliberately NOT wrapping this in any manual rotation anymore
+      // (an earlier version did, via a RotatedBox computed from
+      // sensorOrientation + deviceOrientation). That formula is the
+      // right one for a completely different job — computing rotation
+      // *metadata* to hand to an ML model correcting raw image bytes
+      // (its actual origin: Google's own ML Kit Flutter example) — not
+      // for rotating an already-rendered preview *texture*, which the
+      // camera plugin already handles internally on Android/iOS in
+      // normal use. Layering a manual rotation on top of that is what
+      // produced "upside down" on Android. On web specifically, a
+      // desktop/laptop isn't a physically rotatable device at all, but
+      // deviceOrientation still resolved to *something* (most likely
+      // whatever landscape value matches a monitor's natural wide
+      // shape) — enough to trigger an unwanted 90° correction on a feed
+      // that never needed one, which is what produced "sideways" there.
+      // Trusting the plugin's own handling and only forcing a rebuild
+      // on rotation (the actual original bug) is both simpler and more
+      // correct than trying to reverse-engineer the exact right
+      // rotation math per platform.
       final oriented = ValueListenableBuilder<CameraValue>(
         valueListenable: controller,
-        builder: (context, value, _) => _buildOrientedPreview(controller),
+        builder: (context, value, _) => CameraPreview(controller),
       );
       // See the comment where _mirror is set above for why this is
       // needed at all. Matrix4.rotationY(pi) is a standard horizontal
@@ -218,53 +239,5 @@ class _StcCameraPreviewControlState extends State<StcCameraPreviewControl> {
       child = const Center(child: CircularProgressIndicator());
     }
     return LayoutControl(control: widget.control, child: child);
-  }
-
-  // Maps the OS-reported device orientation to the number of degrees
-  // it's rotated from the phone's natural "upright" position. Standard
-  // reference table for this — the same one used in Google's own
-  // official ML Kit Flutter camera-rotation example, which is the
-  // canonical, widely-verified source for this exact
-  // sensorOrientation+deviceOrientation combination — not something
-  // invented for this project specifically.
-  static const Map<DeviceOrientation, int> _orientationDegrees = {
-    DeviceOrientation.portraitUp: 0,
-    DeviceOrientation.landscapeLeft: 90,
-    DeviceOrientation.portraitDown: 180,
-    DeviceOrientation.landscapeRight: 270,
-  };
-
-  Widget _buildOrientedPreview(CameraController controller) {
-    final sensorOrientation = controller.description.sensorOrientation;
-    final deviceOrientation = controller.value.deviceOrientation;
-    final baseDegrees = _orientationDegrees[deviceOrientation] ?? 0;
-
-    // Front-facing sensors are physically mounted mirrored relative to
-    // back-facing ones, which flips the sign needed here — same
-    // reasoning (and same reference formula) as the ML Kit example
-    // above, just applied to rotating the preview image itself instead
-    // of feeding rotation metadata to an ML model.
-    int rotationCompensation;
-    if (controller.description.lensDirection == CameraLensDirection.front) {
-      rotationCompensation = (sensorOrientation + baseDegrees) % 360;
-    } else {
-      rotationCompensation = (sensorOrientation - baseDegrees + 360) % 360;
-    }
-    final quarterTurns = (rotationCompensation ~/ 90) % 4;
-
-    // NOTE: this direction/formula is the standard, well-documented
-    // approach and should be correct for the vast majority of Android
-    // phones — but every phone model can technically report
-    // sensorOrientation slightly differently, and this hasn't been
-    // verified on the actual device this app runs on (no way to test
-    // real device rotation from here). If the feed still looks off
-    // after this — e.g. sideways instead of upright, or rotating the
-    // wrong direction — that's the one thing to report back, since it
-    // would mean flipping the sign above (- becomes +) rather than the
-    // formula being wrong in general.
-    return RotatedBox(
-      quarterTurns: quarterTurns,
-      child: CameraPreview(controller),
-    );
   }
 }
