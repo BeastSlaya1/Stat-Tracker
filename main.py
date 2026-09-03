@@ -375,11 +375,43 @@ class _MJPEGRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
+                self.wfile.flush()   # see setup() below for why this matters here
                 last_sent_frame = frame
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass   # receiving device disconnected — not an error
         except Exception:
             pass
+
+    def setup(self):
+        """Runs once per connection, before handle(). Two latency fixes
+        for the streaming delay reported between a frame being captured
+        and it actually appearing on the receiving device:
+
+        1. TCP_NODELAY disables Nagle's algorithm on this socket. Nagle's
+           algorithm exists to batch up several *small* writes into one
+           network packet rather than sending each individually — great
+           for chatty protocols sending lots of tiny messages, but actively
+           harmful here: each MJPEG frame is written across several
+           separate wfile.write() calls (boundary marker, headers, then
+           the actual JPEG bytes), and without this, the OS can genuinely
+           sit on the first few of those for up to ~200ms waiting to see
+           if more data is coming before actually sending the packet —
+           adding real, measurable end-to-end delay to every single
+           frame, compounding over a live stream.
+        2. self.wfile.flush() (added at the end of the write sequence
+           above) makes sure Python's own BufferedWriter actually hands
+           the bytes to the OS socket right away rather than potentially
+           holding them until its internal buffer fills up — the second
+           half of the same "don't let anything sit around waiting"
+           fix TCP_NODELAY handles on the OS side.
+        Both are standard, well-established fixes for exactly this
+        symptom in any Python HTTP-based low-latency streaming server,
+        not something specific to this app."""
+        super().setup()
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass   # not fatal if the platform/socket type doesn't support it
 
     def log_message(self, fmt, *args):
         pass   # silence default per-request console spam
@@ -657,6 +689,29 @@ class StatTrackerApp:
         # freeze the live video (same issue the video freeze fix addressed).
         self.fs_clock_text = ft.Text("0'00\"", size=14, color=TEXT2,
                                      weight=ft.FontWeight.BOLD, font_family="monospace")
+        # Same reasoning, extended to the whole fullscreen layout: every stat
+        # button press calls _full_refresh(), which used to rebuild
+        # _build_fullscreen_logger()'s entire ~200-line widget tree from
+        # scratch and reassign page.controls to a brand new top-level object
+        # every single time — even though the camera control itself
+        # (self._stc_preview_ctrl) is a cached, reused Python object deeper
+        # in that tree, wrapping it in an entirely new parent chain on every
+        # refresh was enough to make the client tear down and remount it
+        # (visible as the whole fullscreen view "reloading" on every button
+        # press). These 5 slots are created once and kept for the life of
+        # the app; _build_fullscreen_logger() now only ever updates each
+        # slot's own .content in place and returns the same stable
+        # self._fs_skeleton object every time, rather than building a new
+        # top-level tree per call — page.controls ends up being reassigned
+        # to a list containing that same object reference on every refresh,
+        # which is a structural no-op for Flet's diffing, leaving the real
+        # work scoped to each slot's own (much smaller) subtree instead.
+        self._fs_skeleton = None
+        self.fs_left_slot = ft.Container(expand=False)
+        self.fs_top_slot = ft.Container(expand=False)
+        self.fs_video_slot = ft.Container(expand=True)
+        self.fs_bottom_slot = ft.Container(expand=False)
+        self.fs_right_slot = ft.Container(expand=False)
         self._cv2_cap = None
         self._camera_capture_stop = threading.Event()
         self.camera_image = ft.Image(
@@ -2205,15 +2260,32 @@ class StatTrackerApp:
         # layout, so panels sit beside and around the video and can never
         # overlap each other, unlike the previous Stack-based approach.
         # Panel backgrounds stay semi-transparent for a "floating" look.
-        return ft.Container(
-            content=ft.Row([
-                ft.Container(content=left_panel, expand=False),
-                ft.Container(
-                    content=ft.Column([top_bar, video_area, bottom_bar], spacing=8, expand=True),
-                    expand=True),
-                ft.Container(content=right_panel, expand=False),
-            ], spacing=8, expand=True),
-            bgcolor=BG, padding=8, expand=True)
+        #
+        # The 5 pieces built above (left_panel, top_bar, video_area,
+        # bottom_bar, right_panel) get assigned into the 5 persistent slot
+        # containers' .content here, rather than this function returning a
+        # brand new top-level tree each call — see where self._fs_skeleton
+        # is initialized (in __init__) for why that distinction is what
+        # actually stops the fullscreen view (camera included) from
+        # visibly "reloading" on every single stat button press.
+        self.fs_left_slot.content = left_panel
+        self.fs_top_slot.content = top_bar
+        self.fs_video_slot.content = video_area
+        self.fs_bottom_slot.content = bottom_bar
+        self.fs_right_slot.content = right_panel
+
+        if self._fs_skeleton is None:
+            self._fs_skeleton = ft.Container(
+                content=ft.Row([
+                    ft.Container(content=self.fs_left_slot, expand=False),
+                    ft.Container(
+                        content=ft.Column([self.fs_top_slot, self.fs_video_slot, self.fs_bottom_slot],
+                                          spacing=8, expand=True),
+                        expand=True),
+                    ft.Container(content=self.fs_right_slot, expand=False),
+                ], spacing=8, expand=True),
+                bgcolor=BG, padding=8, expand=True)
+        return self._fs_skeleton
 
     def _enter_fullscreen_video(self, _=None):
         self.fullscreen_video = True

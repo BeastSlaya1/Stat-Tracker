@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flet/flet.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// A deliberately minimal live camera preview control.
@@ -187,28 +188,46 @@ class _StcCameraPreviewControlState extends State<StcCameraPreviewControl> {
       // events — that update is what this listens for, so a rotation is
       // what actually triggers a fresh rebuild of CameraPreview below.
       //
-      // Deliberately NOT wrapping this in any manual rotation anymore
-      // (an earlier version did, via a RotatedBox computed from
-      // sensorOrientation + deviceOrientation). That formula is the
-      // right one for a completely different job — computing rotation
-      // *metadata* to hand to an ML model correcting raw image bytes
-      // (its actual origin: Google's own ML Kit Flutter example) — not
-      // for rotating an already-rendered preview *texture*, which the
-      // camera plugin already handles internally on Android/iOS in
-      // normal use. Layering a manual rotation on top of that is what
-      // produced "upside down" on Android. On web specifically, a
-      // desktop/laptop isn't a physically rotatable device at all, but
-      // deviceOrientation still resolved to *something* (most likely
-      // whatever landscape value matches a monitor's natural wide
-      // shape) — enough to trigger an unwanted 90° correction on a feed
-      // that never needed one, which is what produced "sideways" there.
-      // Trusting the plugin's own handling and only forcing a rebuild
-      // on rotation (the actual original bug) is both simpler and more
-      // correct than trying to reverse-engineer the exact right
-      // rotation math per platform.
+      // Rotation itself, after two wrong attempts, is now derived from
+      // actual evidence rather than more theorizing:
+      //   1. Original: no correction at all -> "stays vertical" (this
+      //      part was really about not rebuilding on rotation at all,
+      //      fixed above by the ValueListenableBuilder).
+      //   2. A dynamic sensorOrientation+deviceOrientation formula
+      //      (borrowed from Google's own ML Kit example, meant for
+      //      correcting raw image bytes for an ML model — a different
+      //      job from rotating an already-rendered preview texture) ->
+      //      "upside down" on Android.
+      //   3. No manual rotation at all again (trusting the plugin to
+      //      handle it internally, which turned out to be wrong for
+      //      this device) -> "sideways" on Android, and incidentally
+      //      "sideways" on web too (a desktop monitor isn't a
+      //      physically rotatable device at all, so deviceOrientation
+      //      was never meaningful there in the first place).
+      // A 180° error (attempt 2's "upside down") is its own mirror
+      // image regardless of rotation direction, which makes the
+      // correct value computable directly from that result rather than
+      // guessed again: exactly two quarter-turns away from whatever
+      // attempt 2 produced. With baseDegrees=0 (portraitUp) and a
+      // typical back-camera sensorOrientation of 90°, attempt 2's
+      // formula reduced to quarterTurns = 1 — so the corrected value
+      // below is (1 + 2) % 4 = 3, expressed generally as
+      // ((sensorOrientation ~/ 90) + 2) % 4 so it still adapts to
+      // whatever sensorOrientation this specific device/camera actually
+      // reports rather than hardcoding 3 outright. Deliberately static
+      // (no deviceOrientation dependency this time) — sensorOrientation
+      // is a fixed per-camera constant, not something that changes as
+      // the phone physically rotates, and dropping the dynamic part
+      // entirely is also what avoids reintroducing web's false-positive
+      // "landscape" misdetection from attempt 2.
+      final quarterTurns =
+          kIsWeb ? 0 : ((controller.description.sensorOrientation ~/ 90) + 2) % 4;
       final oriented = ValueListenableBuilder<CameraValue>(
         valueListenable: controller,
-        builder: (context, value, _) => CameraPreview(controller),
+        builder: (context, value, _) => RotatedBox(
+          quarterTurns: quarterTurns,
+          child: CameraPreview(controller),
+        ),
       );
       // See the comment where _mirror is set above for why this is
       // needed at all. Matrix4.rotationY(pi) is a standard horizontal
