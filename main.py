@@ -3649,6 +3649,8 @@ class StatTrackerApp:
         than parsing multipart boundaries precisely — simpler and robust to
         the minor formatting differences between IP-camera apps."""
         printed_error = False
+        _MIN_UPDATE_INTERVAL = 1.0 / 30.0  # cap UI pushes at ~30fps
+        _last_ui_update = 0.0
         while not self._camera_capture_stop.is_set():
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "StatTracker/4"})
@@ -3659,6 +3661,22 @@ class StatTrackerApp:
                         if not chunk:
                             break
                         buf += chunk
+                        # Drain every complete JPEG currently sitting in buf,
+                        # but only keep the LAST one for display. Reading in
+                        # 8KB chunks means several whole frames can already
+                        # be waiting in the socket buffer by the time we get
+                        # here (e.g. right after camera_image.update()'s own
+                        # round-trip finished) — displaying every one of
+                        # those in order, oldest first, is exactly what was
+                        # producing the growing lag: the UI was always a few
+                        # frames behind and never caught back up, since each
+                        # .update() (a real network/UI round-trip) takes far
+                        # longer than a frame decode. Skipping straight to
+                        # the newest frame here means the pull loop is
+                        # always showing "now", not "a few frames ago", and
+                        # any queued frames get discarded instead of forcing
+                        # the UI to slowly work through a backlog.
+                        newest_jpeg = None
                         while True:
                             start = buf.find(b"\xff\xd8")
                             if start == -1:
@@ -3670,17 +3688,28 @@ class StatTrackerApp:
                                     buf = buf[start + 2:]
                                 break
                             end += 2
-                            jpeg = buf[start:end]
+                            newest_jpeg = buf[start:end]
                             buf = buf[end:]
-                            self._latest_jpeg_frame = jpeg
+                        if newest_jpeg is not None:
+                            self._latest_jpeg_frame = newest_jpeg
                             with self._new_frame_cond:
                                 self._new_frame_cond.notify_all()
-                            b64 = base64.b64encode(jpeg).decode("ascii")
-                            self.camera_image.src = f"data:image/jpeg;base64,{b64}"
-                            try:
-                                self.camera_image.update()
-                            except Exception:
-                                pass
+                            # Throttle how often we push to the local Flet
+                            # UI specifically — the MJPEG passthrough above
+                            # (for a second paired device) already runs at
+                            # full speed via _latest_jpeg_frame/the
+                            # condition variable and isn't affected by this;
+                            # this only paces the on-screen preview so it
+                            # can't fall behind its own update() calls.
+                            now = time.monotonic()
+                            if now - _last_ui_update >= _MIN_UPDATE_INTERVAL:
+                                _last_ui_update = now
+                                b64 = base64.b64encode(newest_jpeg).decode("ascii")
+                                self.camera_image.src = f"data:image/jpeg;base64,{b64}"
+                                try:
+                                    self.camera_image.update()
+                                except Exception:
+                                    pass
                         if self._camera_capture_stop.is_set():
                             break
             except Exception as ex:
