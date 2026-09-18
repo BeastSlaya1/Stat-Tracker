@@ -1,0 +1,6 @@
+build/
+.dart_tool/
+__pycache__/
+*.pyc
+*.p12
+*.mobileprovision
