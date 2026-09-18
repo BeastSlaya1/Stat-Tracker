@@ -1,0 +1,12 @@
+pyproject.toml
+flutter/stc_camera_preview/pubspec.yaml
+flutter/stc_camera_preview/lib/stc_camera_preview.dart
+flutter/stc_camera_preview/lib/src/camera_preview.dart
+flutter/stc_camera_preview/lib/src/extension.dart
+stc_camera_preview/__init__.py
+stc_camera_preview/camera_preview.py
+stc_camera_preview.egg-info/PKG-INFO
+stc_camera_preview.egg-info/SOURCES.txt
+stc_camera_preview.egg-info/dependency_links.txt
+stc_camera_preview.egg-info/requires.txt
+stc_camera_preview.egg-info/top_level.txt

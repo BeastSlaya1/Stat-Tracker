@@ -1,0 +1,42 @@
+name: Build iPhone and iPad archive
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: Apple bundle ID (replace the example before distribution)
+        required: true
+        default: com.example.stattracker
+        type: string
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      BUNDLE_ID: ${{ inputs.bundle_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install build tools
+        run: python -m pip install "flet==0.86.5" "flet-cli==0.86.5"
+      - name: Build unsigned device archive
+        working-directory: mobile/ios
+        run: >-
+          python -m flet.cli build ipa --project "Stat Tracker"
+          --product "Stat Tracker" --bundle-id "$BUNDLE_ID"
+          --build-version 4.0.1 --build-number 2 --yes --no-rich-output
+      - name: Package archive with symbolic links preserved
+        working-directory: mobile/ios
+        run: |
+          archive=$(find build -type d -name '*.xcarchive' -print -quit)
+          test -n "$archive" || { echo "No Xcode archive produced"; exit 1; }
+          tar -czf "$GITHUB_WORKSPACE/Stat-Tracker-iOS-unsigned.xcarchive.tar.gz" -C "$(dirname "$archive")" "$(basename "$archive")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stat-Tracker-iPhone-iPad-unsigned
+          path: Stat-Tracker-iOS-unsigned.xcarchive.tar.gz
+          if-no-files-found: error
+          retention-days: 7
