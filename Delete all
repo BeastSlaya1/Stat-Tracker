@@ -1,3 +1,0 @@
-cd "/Stat-Tracker.git"
-git rm -r * # delete everything
-cp -r "/Stat-Tracker.git"
