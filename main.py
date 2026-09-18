@@ -1141,6 +1141,9 @@ class StatTrackerApp:
                 # so they can never get clipped off the edge of the window,
                 # regardless of window width.
                 ft.Row([
+                    ft.Button("Get the app", icon=ft.Icons.DOWNLOAD,
+                              url="https://stattrackerv4.stream/downloads/",
+                              tooltip="Download for Android, Windows, iPhone and iPad"),
                     nav_btn(ft.Icons.MENU_BOOK, "Dictionary", AMBER,
                             "Action dictionary", self._open_dictionary_dialog),
                     nav_btn(ft.Icons.PALETTE, "Kit Colours", PURPLE4,
