@@ -1077,20 +1077,22 @@ class StatTrackerApp(DatabaseSyncMixin):
             except Exception: pass
 
     # ── UI skeleton ───────────────────────────────────────────────────────────
+    def _build_workspace_shell(self):
+        # The working area always gets 60% of the available app height.
+        # Header controls remain accessible by scrolling their own pane.
+        header = ft.Container(expand=4, content=ft.Column([
+            ft.Column([self._build_navbar(), self.scoreboard_ref],
+                      spacing=0, scroll=ft.ScrollMode.AUTO, expand=True),
+            ft.Container(content=self.tab_bar_ref, bgcolor=SURFACE,
+                         border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
+                         padding=ft.Padding.symmetric(horizontal=12, vertical=4)),
+        ], spacing=0, expand=True))
+        workspace = ft.Container(content=self.tab_content_ref, expand=6,
+                                 bgcolor=BG, padding=ft.Padding.all(8))
+        return ft.Column([header, workspace], spacing=0, expand=True)
+
     def _build_ui(self):
-        self.page.controls = [
-            ft.Column([
-                self._build_navbar(),
-                self.scoreboard_ref,
-                ft.Container(
-                    content=self.tab_bar_ref,
-                    bgcolor=SURFACE,
-                    border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
-                    padding=ft.Padding.symmetric(horizontal=16, vertical=6)),
-                ft.Container(content=self.tab_content_ref, expand=True, bgcolor=BG,
-                             padding=ft.Padding.symmetric(horizontal=16, vertical=12)),
-            ], spacing=0, expand=True),
-        ]
+        self.page.controls = [self._build_workspace_shell()]
         self.page.update()
 
     def _logger_name_pill(self):
@@ -1174,7 +1176,8 @@ class StatTrackerApp(DatabaseSyncMixin):
                         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10),
                                              padding=ft.Padding.symmetric(horizontal=14, vertical=8)),
                         on_click=self._open_new_match_dialog),
-                ], spacing=8, wrap=True),
+                ], spacing=8, wrap=self._layout_width() < 800,
+                   scroll=ft.ScrollMode.AUTO if self._layout_width() >= 800 else None),
                 # Secondary actions in their own horizontally-scrollable strip
                 # so they can never get clipped off the edge of the window,
                 # regardless of window width.
@@ -1251,19 +1254,7 @@ class StatTrackerApp(DatabaseSyncMixin):
         # Rebuild the whole normal-mode wrapper fresh each time so we can
         # reliably switch back from fullscreen mode (which replaces
         # page.controls entirely) to the normal layout.
-        self.page.controls = [
-            ft.Column([
-                self._build_navbar(),
-                self.scoreboard_ref,
-                ft.Container(
-                    content=self.tab_bar_ref,
-                    bgcolor=SURFACE,
-                    border=ft.Border.only(bottom=ft.BorderSide(1, BORDER)),
-                    padding=ft.Padding.symmetric(horizontal=16, vertical=6)),
-                ft.Container(content=self.tab_content_ref, expand=True, bgcolor=BG,
-                             padding=ft.Padding.symmetric(horizontal=16, vertical=12)),
-            ], spacing=0, expand=True),
-        ]
+        self.page.controls = [self._build_workspace_shell()]
         try: self.page.update()
         except Exception: pass
 
@@ -1397,7 +1388,7 @@ class StatTrackerApp(DatabaseSyncMixin):
             margin=ft.Margin.symmetric(horizontal=10, vertical=5))
 
     def _build_scoreboard(self, m: Match):
-        if self._layout_width() < 1000:
+        if self._layout_width() < 1000 or float(getattr(self.page, "height", None) or 800) < 1000:
             return self._build_scoreboard_compact(m)
         period_color = AMBER if m.period == "OVERTIME" else INDIGO if m.period == "SCHEDULED" else MUTED2
         live_label   = "LIVE" if m.is_live else ("SCHEDULED" if m.period == "SCHEDULED" else "ENDED")
