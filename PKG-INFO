@@ -1,6 +1,0 @@
-Metadata-Version: 2.4
-Name: stc-camera-preview
-Version: 0.1.0
-Summary: Stat Tracker's minimal live camera preview control (custom Flet extension).
-Requires-Python: >=3.10
-Requires-Dist: flet==0.86.5
