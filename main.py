@@ -637,12 +637,6 @@ class StatTrackerApp(DatabaseSyncMixin):
                 self.page.services.append(self._web_prefs)
             except Exception as ex:
                 print(f"[Storage-Web] Could not create SharedPreferences service: {ex}")
-            else:
-                if hasattr(self.page, "run_task"):
-                    try:
-                        self.page.run_task(self._load_web_data_async)
-                    except Exception as ex:
-                        print(f"[Storage-Web] Could not schedule initial load: {ex}")
 
         self.matches: List[Match] = [] if self.is_web else load_matches()   # req 16: no sample match
         self._splash_tick(0.28, "Loading saved matches…")
@@ -825,11 +819,17 @@ class StatTrackerApp(DatabaseSyncMixin):
         self._splash_tick(1.0, "Ready!")
         time.sleep(0.35)   # let 100% register on screen before switching over
         self._full_refresh()
+        if self.is_web:
+            self.page.run_task(self._load_web_data_async)
+        else:
+            self._show_startup_dialogs()
+        self.page.run_task(self._database_loop)
+
+    def _show_startup_dialogs(self):
         if not self.logger_name:
             self._open_name_dialog(first_launch=True)
         elif not self._app_mode_ever_chosen:
             self._open_mode_dialog(first_launch=True)
-        self.page.run_task(self._database_loop)
 
     def _setup_page(self):
         p = self.page
@@ -981,6 +981,8 @@ class StatTrackerApp(DatabaseSyncMixin):
             print(f"[Storage-Web] Could not schedule save: {ex}")
 
     async def _save_web_async(self):
+        if not self._web_loaded or getattr(self, "_web_load_failed", False):
+            return
         try:
             payload = json.dumps({
                 "matches": [m.to_dict() for m in self.matches],
@@ -992,19 +994,13 @@ class StatTrackerApp(DatabaseSyncMixin):
             print(f"[Storage-Web] Save failed: {ex}")
 
     async def _load_web_data_async(self):
-        """Web build only — scheduled once from __init__, right after the
-        SharedPreferences service is created. Runs concurrently with the
-        rest of (synchronous) __init__ and finishes shortly after it, so
-        the app briefly shows "no matches" / a blank logger name before
-        this fills them in and refreshes — same brief-then-corrects
-        pattern already used for the native camera's async init."""
-        if not self._web_prefs:
-            return
+        """Restore browser settings after initialization, before onboarding."""
+        self._web_load_failed = False
         try:
+            if not self._web_prefs:
+                raise RuntimeError("Browser storage is unavailable")
             raw = await self._web_prefs.get(self._WEB_DATA_KEY)
-            if not raw:
-                return
-            data = json.loads(raw)
+            data = json.loads(raw) if raw else {}
             self._loaded_database = data.get("database")
             loaded_matches = [Match.from_dict(d) for d in data.get("matches", [])]
             if loaded_matches:
@@ -1019,9 +1015,13 @@ class StatTrackerApp(DatabaseSyncMixin):
                 self._app_mode_ever_chosen = True
             self._full_refresh()
         except Exception as ex:
+            self._web_load_failed = True
             print(f"[Storage-Web] Load failed: {ex}")
+            self._snack("Could not load saved browser settings. Reload the page to retry.")
         finally:
             self._web_loaded = True
+        if not self._web_load_failed:
+            self._show_startup_dialogs()
 
     def _launch_autosave_loop(self):
         """Launch the 60s autosave loop using the same 3-tier strategy as
