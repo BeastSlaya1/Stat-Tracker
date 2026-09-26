@@ -1,0 +1,77 @@
+[project]
+name = "stat-tracker"
+version = "4.0.9"
+description = "St Charles College football match statistics tracker"
+requires-python = ">=3.10"
+# Shared Python app; the local extension provides embedded WebRTC on all platforms.
+dependencies = [
+    "flet==0.86.5",
+]
+
+# Mobile camera dependencies include the legacy camera fallback.
+[tool.flet.android]
+dependencies = [
+    "flet-camera==0.86.5",
+    "stc-camera-preview",
+]
+
+[tool.flet.ios]
+dependencies = [
+    "flet-camera==0.86.5",
+    "stc-camera-preview",
+]
+
+# Desktop also keeps OpenCV for legacy HTTP/MJPEG sources.
+[tool.flet.windows]
+dependencies = [
+    "stc-camera-preview",
+    "opencv-python>=4.8.0",
+    # opencv-python depends on numpy internally (imported as part of
+    # cv2's own startup, not just for numpy-array-based APIs this app
+    # happens to use) — numpy itself isn't declared as a normal Python
+    # package dependency in a way every build/install mechanism resolves
+    # automatically, and it was deliberately removed from this project's
+    # OWN dependencies a while back (the Stats-tab radar chart no longer
+    # needs it after being rewritten to draw natively). Declaring it
+    # explicitly here is cheap insurance against exactly the situation
+    # being debugged right now: cv2.pyd genuinely present on disk, but
+    # `import cv2` still raising ImportError.
+    "numpy>=1.24.0",
+]
+
+[tool.flet.macos]
+dependencies = [
+    "stc-camera-preview",
+    "opencv-python>=4.8.0",
+]
+
+[tool.flet.linux]
+dependencies = [
+    "stc-camera-preview",
+    "opencv-python>=4.8.0",
+]
+
+# Browser capture and receiving use the shared embedded WebRTC extension.
+[tool.flet.web]
+dependencies = [
+    "flet-camera==0.86.5",
+    "stc-camera-preview",
+]
+
+# The actual on-disk location of stc-camera-preview (see the comment
+# above [tool.flet.android]) — one shared mapping since it's the same
+# path for every platform that uses it. flet_cli resolves this path
+# relative to the project root correctly, unlike the "@ file:./..."
+# syntax that was here before.
+[tool.flet.dev_packages]
+"stc-camera-preview" = "packages/stc_camera_preview"
+
+[tool.flet.ios.info]
+NSCameraUsageDescription = "Stat Tracker uses your camera to preview and stream a match to your paired device."
+NSLocalNetworkUsageDescription = "Stat Tracker connects to your paired camera or computer on the same Wi-Fi network."
+
+[tool.flet.ios.info.NSAppTransportSecurity]
+NSAllowsLocalNetworking = true
+
+[tool.flet.app]
+exclude = ["web-downloads", "scripts", "tests", "repair-notes", "mobile", "server", "installer"]
