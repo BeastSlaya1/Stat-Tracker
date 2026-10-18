@@ -1,0 +1,20 @@
+"""SCC-only statistics shared by match views and comparisons."""
+from collections import Counter
+
+def _match_statistics(match):
+    if match.sport == 'HOCKEY':
+        from hockey import statistics
+        return statistics(match)
+    if match.sport == 'BASKETBALL':
+        from basketball import summary, DEFINITIONS
+        return {key:(DEFINITIONS[key][0],value) for key,value in summary(match)['home']['team'].items() if key not in ('DD','TD','BENCH','PAINT','FASTBREAK','SECONDCHANCE','OFFTURNOVER','ADJUSTMENT','CHARGE','EFF','POSS','SHOTS_AGAINST','MISSES_AGAINST','UNRESOLVED_AGAINST','POINTS_AGAINST')}
+    if match.sport == 'SOCCER':
+        return {key:(key.removeprefix('home_').replace('_',' ').capitalize(),value) for key,value in match.stats.to_dict().items() if key.startswith('home_')}
+    counts=Counter(e.event_type for e in match.events if e.team_id=='home')
+    return {'score':('SCC score',match.home_score),**{key:(key.replace('_',' ').capitalize(),value) for key,value in counts.items()}}
+
+
+def match_statistics(match):
+    from stat_policy import retired
+    return {key:value for key,value in _match_statistics(match).items()
+            if not retired(key) and not any(word in key.lower() for word in ('pass','dribble','cross'))}
