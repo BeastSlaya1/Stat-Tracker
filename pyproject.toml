@@ -77,7 +77,11 @@ NSLocalNetworkUsageDescription = "Stat Tracker connects to your paired camera or
 NSAllowsLocalNetworking = true
 
 [tool.flet.app]
-exclude = ["web-downloads", "scripts", "tests", "repair-notes", "mobile", "server", "installer"]
+exclude = [
+    "web-downloads", "scripts", "tests", "repair-notes", "mobile", "server", "installer",
+    ".git", "__pycache__",
+    "stattracker_data.json", "stattracker_settings.json", "stattracker_sync.json",
+]
 
 # User-approved LAN HTTP for offline sharing; cloud sync still requires HTTPS.
 [tool.flet.android.manifest_application]
