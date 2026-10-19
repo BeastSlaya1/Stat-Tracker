@@ -1,18 +1,95 @@
 """Add a versioned, asset-only offline cache to an already built Flet website."""
 from pathlib import Path
+from zipfile import ZipFile
 import hashlib
 import json
+import shutil
 import sys
+import tempfile
+
+
+def remove_private_app_files(root):
+    """Keep local state and development history out of the browser bundle.
+
+    Flet's app archive is downloaded by every browser on startup. In addition
+    to slowing first load, it must never contain a developer's local match
+    database or repository history.
+    """
+    archive = Path(root) / 'assets/app/app.zip'
+    private_names = {
+        'stattracker_data.json',
+        'stattracker_settings.json',
+        'stattracker_sync.json',
+    }
+
+    def is_private(name):
+        parts = Path(name).parts
+        if '.git' in parts or '__pycache__' in parts:
+            return True
+        base = parts[-1].lower() if parts else ''
+        return any(base == item or base.startswith(item + '.corrupt-')
+                   for item in private_names)
+
+    with ZipFile(archive, 'r') as source:
+        retained = [item for item in source.infolist() if not is_private(item.filename)]
+        if len(retained) == len(source.infolist()):
+            return 0
+        removed_count = len(source.infolist()) - len(retained)
+        with tempfile.NamedTemporaryFile(dir=archive.parent, suffix='.zip', delete=False) as tmp:
+            temp_path = Path(tmp.name)
+        try:
+            with ZipFile(temp_path, 'w') as target:
+                target.comment = source.comment
+                for item in retained:
+                    target.writestr(item, source.read(item.filename))
+            try:
+                temp_path.replace(archive)
+            except PermissionError:
+                # Windows app hosts can deny atomic replacement of an open
+                # build artifact; the build output itself is safe to rewrite.
+                shutil.copyfile(temp_path, archive)
+                temp_path.unlink()
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+    return removed_count
 
 
 def prepare(root):
     root=Path(root).resolve()
     for name in ('index.html','python-worker.js','pyodide/pyodide.mjs','assets/app/app.zip'):
         if not (root/name).is_file():raise ValueError('Missing web build resource: '+name)
+    removed = remove_private_app_files(root)
     index=root/'index.html';text=index.read_text(encoding='utf-8')
     import re
     text=re.sub(r'noCdn:\s*[^,\n]+', 'noCdn: true',text)
     text=re.sub(r'pyodideUrl:\s*"[^"]+"','pyodideUrl: "./pyodide/pyodide.mjs"',text)
+    # Flutter's first frame can arrive while its Pyodide worker is still
+    # downloading and initializing the Python app. Keep the branded splash
+    # visible until the app sets its runtime title, instead of exposing a
+    # blank canvas during that interval.
+    splash_marker = 'function removeSplashFromWeb() {'
+    if splash_marker in text and 'stcDeferredSplash' not in text:
+        text=text.replace(splash_marker, '''function removeSplashFromWeb() {
+      if (document.title === "Stat Tracker") {
+        const titleNode = document.querySelector("title");
+        const status = document.createElement("div");
+        status.id = "stc-loading-status";
+        status.textContent = "Loading Stat Tracker...";
+        status.setAttribute("style", "position:fixed;left:50%;bottom:8vh;transform:translateX(-50%);z-index:9999;color:#94a3b8;font:15px system-ui,sans-serif;text-align:center;padding:10px 16px;max-width:90vw");
+        document.body.appendChild(status);
+        const stcDeferredSplash = new MutationObserver(() => {
+          if (document.title !== "Stat Tracker") {
+            stcDeferredSplash.disconnect();
+            status.remove();
+            document.getElementById("splash")?.remove();
+            document.getElementById("splash-branding")?.remove();
+            document.body.style.background = "transparent";
+          }
+        });
+        if (titleNode) stcDeferredSplash.observe(titleNode, {childList:true, characterData:true, subtree:true});
+        return;
+      }''')
     # Use the same JavaScript/WebAssembly build on desktop and mobile Safari.
     # Let installed web apps rotate rather than locking the match to portrait.
     if 'name="apple-mobile-web-app-capable"' not in text:
@@ -82,7 +159,7 @@ event.respondWith((async()=>{const cache=await caches.open(CACHE);return (await 
 self.addEventListener('message',event=>{if(event.data?.type==='status')event.waitUntil((async()=>{const cache=await caches.open(CACHE);event.ports[0]?.postMessage({ready:!!await cache.match(new URL('__offline_ready__',ROOT))});})());});
 '''.replace('__VERSION__',json.dumps(version)).replace('__FILES__',json.dumps(sorted(files)))
     (root/'flutter_service_worker.js').write_text(worker,encoding='utf-8')
-    print(f'Offline website prepared: {len(files)} assets, version {version}')
+    print(f'Offline website prepared: {len(files)} assets, version {version}; removed {removed} private/development archive entries')
     return manifest
 
 if __name__=='__main__':prepare(sys.argv[1] if len(sys.argv)>1 else 'build/web')
