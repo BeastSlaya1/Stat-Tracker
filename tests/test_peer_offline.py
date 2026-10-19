@@ -2,6 +2,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from zipfile import ZipFile
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock
 import flet as ft
@@ -10,7 +11,7 @@ from test_basketball import match
 from shared_match import SharedMatch, SharedError
 from shared_permissions import assignment
 from engine import make_event
-from scripts.prepare_offline_web import prepare
+from scripts.prepare_offline_web import prepare, remove_private_app_files
 
 class PeerAuthorityTests(unittest.TestCase):
     def setUp(self):
@@ -55,15 +56,40 @@ class PeerRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(a._live_session['address'],'peer')
 
 class OfflinePackageTests(unittest.TestCase):
+    def test_web_archive_excludes_private_state_and_development_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / 'assets/app/app.zip'
+            archive.parent.mkdir(parents=True)
+            with ZipFile(archive, 'w') as package:
+                package.writestr('main.pyc', b'app')
+                package.writestr('stattracker_data.json', b'private matches')
+                package.writestr('stattracker_settings.json', b'private settings')
+                package.writestr('stattracker_data.json.corrupt-123', b'private backup')
+                package.writestr('.git/objects/pack/repo.pack', b'history')
+                package.writestr('packages/camera/__pycache__/module.pyc', b'cache')
+            removed = remove_private_app_files(directory)
+            self.assertEqual(removed, 5)
+            with ZipFile(archive) as package:
+                self.assertEqual(package.namelist(), ['main.pyc'])
+                self.assertEqual(package.read('main.pyc'), b'app')
+
     def test_runtime_is_local_and_api_responses_are_not_cached(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
             for name in ('index.html','python-worker.js','pyodide/pyodide.mjs','assets/app/app.zip'):
                 p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('noCdn: false, pyodideUrl: "https://cdn.example/pyodide.mjs"')
+            with ZipFile(root/'assets/app/app.zip','w') as package:
+                package.writestr('main.pyc',b'app')
+                package.writestr('stattracker_data.json',b'private matches')
             (root/'manifest.json').write_text('{"orientation":"portrait-primary"}')
-            (root/'index.html').write_text((root/'index.html').read_text()+'</head>')
+            (root/'index.html').write_text(
+                (root/'index.html').read_text()
+                + '<script>function removeSplashFromWeb() {document.body.style.background="transparent";}</script></head>'
+            )
             result=prepare(root)
             self.assertIn('apple-mobile-web-app-capable',(root/'index.html').read_text())
+            self.assertIn('stc-loading-status',(root/'index.html').read_text())
+            self.assertIn('Loading Stat Tracker...',(root/'index.html').read_text())
             self.assertIn('"orientation": "any"',(root/'manifest.json').read_text())
             self.assertIn('Add to Home Screen',(root/'offline.html').read_text())
             self.assertIn('pyodide/pyodide.mjs',result['files'])
@@ -73,3 +99,5 @@ class OfflinePackageTests(unittest.TestCase):
             self.assertIn("if(!urls.includes(key))return",script)
             self.assertIn("event.request.method!=='GET'",script)
             self.assertIn('caches.delete(CACHE)',script)
+            with ZipFile(root/'assets/app/app.zip') as package:
+                self.assertEqual(package.namelist(), ['main.pyc'])
