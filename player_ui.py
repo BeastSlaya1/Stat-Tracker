@@ -68,9 +68,15 @@ class PlayerMixin:
             self.page.update()
         def toggle(row):
             if state['busy']:return
-            row['active']=not row['active'];render()
+            row['active']=not row['active'];cache_local_change();render()
         def busy(value):
             state['busy']=value;selector.disabled=value or user.get('role')=='coach';number.disabled=value;self.page.update()
+        def cache_local_change():
+            state['pending']=True
+            if not hasattr(self,'_team_rosters'):self._team_rosters={}
+            self._team_rosters[key()]={'version':state.get('version',0),'players':copy.deepcopy(state['players']),'pending':True}
+            status.value='Saved on this device. Press Save when online to sync the roster.'
+            self.page.run_task(self._persist_database)
         async def load(_=None):
             if not allowed() or state['busy']:return
             busy(True);state['loaded']=False
@@ -88,8 +94,13 @@ class PlayerMixin:
                     status.value='Unsynced changes on this device. Save to upload.' if state.get('pending') else ''
                 except Exception as error:
                     if getattr(error,'status',0) in (400,401,403):status.value=str(error);return
-                    if not cache:status.value='Could not load the team. Connect to the updated server first.';return
-                    state.update(copy.deepcopy(cache));status.value='Offline — using this device’s saved roster.'
+                    if cache:
+                        state.update(copy.deepcopy(cache));status.value='Offline — using this device’s saved roster.'
+                    else:
+                        # A new offline team can be managed locally before it
+                        # has ever synced. The save below will queue it.
+                        state.update({'version':0,'players':[],'pending':True})
+                        status.value='Offline — changes will be saved on this device and uploaded when online.'
                 if allowed():state['loaded']=True
             finally:busy(False);render()
         def add(_):
@@ -101,17 +112,31 @@ class PlayerMixin:
             row=next((p for p in state['players'] if p['number']==n),None)
             if row:row['active']=True
             else:state['players'].append({'id':uuid.uuid4().hex,'number':n,'active':True})
-            number.value='';render()
+            number.value='';cache_local_change();render()
         async def save(_):
             if not allowed() or not state['loaded'] or state['busy']:return
             busy(True);cache_key=key();code=selector.value.replace(' ','').upper()
             payload={'version':state['version'],'players':copy.deepcopy(state['players'])}
             try:
                 try:
+                    # Fetch the latest server version before applying the local
+                    # roster. Merge by jersey number so simultaneous roster
+                    # edits do not overwrite another device's additions.
+                    remote=await api_request(self._database_url,'/rosters?team='+code,token)
+                    local_by_number={int(p['number']):copy.deepcopy(p) for p in payload['players']}
+                    remote_by_number={int(p['number']):copy.deepcopy(p) for p in remote.get('players',[])}
+                    merged=copy.deepcopy(remote_by_number)
+                    for jersey,local_player in local_by_number.items():
+                        if jersey in merged:
+                            # Preserve the shared player identity for jerseys
+                            # already known to the server.
+                            merged[jersey]={**merged[jersey],**local_player,'id':merged[jersey]['id']}
+                        else:merged[jersey]=local_player
+                    payload={'version':remote.get('version',0),'players':list(merged.values())}
                     payload=await api_request(self._database_url,'/rosters?team='+code,token,method='PUT',body=payload)
                     status.value='Team jerseys saved.'
                 except Exception as error:
-                    if getattr(error,'status',0) in (400,401,403,409):status.value=str(error);return
+                    if getattr(error,'status',0) in (400,401,403):status.value=str(error);return
                     payload['pending']=True;status.value='Saved on this device. Reopen Team jerseys and Save when online to upload.'
                 if not allowed():return
                 if not hasattr(self,'_team_rosters'):self._team_rosters={}
