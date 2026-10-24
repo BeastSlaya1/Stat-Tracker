@@ -100,7 +100,6 @@ class BasketballMixin:
         finished = m.period == "FULL_TIME" or not self._live_controls('time')
         return [
             action_btn("Pause" if self._timer_running else "Start",ft.Icons.PAUSE if self._timer_running else ft.Icons.PLAY_ARROW,"#34d399",self._bb_toggle_timer,disabled=finished),
-            action_btn("Turnover",ft.Icons.SYNC_ALT,"#f43f5e",lambda _:self._bb_log("TO"),disabled=not self._live_controls('time')),
             action_btn("Timeout",ft.Icons.TIMER,"#38bdf8",lambda _:self._bb_log("TIMEOUT"),disabled=not self._live_controls('time')),
             action_btn("Substitution",ft.Icons.SWAP_HORIZ,"#38bdf8",lambda _:self._bb_log("SUBSTITUTION"),disabled=not self._live_controls('time')),
             action_btn("Overtime",ft.Icons.MORE_TIME,"#c084fc",self._bb_overtime,disabled=not self._live_controls('time') or m.period not in ("Q1","Q2","Q3","Q4")),
@@ -148,26 +147,26 @@ class BasketballMixin:
 
     def _bb_tabs(self):
         current = getattr(self, "_bb_category", "Attack")
+        if current == "Defence":
+            current = "Defense"
         def select(value):
             self._bb_conversion_target = None
             self._bb_category = value
             self._full_refresh()
-        return ft.Row([ft.Container(content=ft.Text("Defense" if name == "Defence" else name, size=10, color=color if current == name else "#64748b", weight=ft.FontWeight.BOLD), bgcolor=color+"22" if current == name else "transparent", border=ft.Border.all(1,color+"44" if current == name else "#1e293b"), border_radius=8, padding=ft.Padding.symmetric(horizontal=10,vertical=4), on_click=lambda _,n=name:select(n),ink=True) for name,color in [("Attack","#34d399"),("Defence","#818cf8"),("Cards","#fbbf24"),("Opposition","#f43f5e")] if self._live_section_allowed(name)],spacing=6,wrap=True)
+        return ft.Row([ft.Container(content=ft.Text(name, size=10, color=color if current == name else "#64748b", weight=ft.FontWeight.BOLD), bgcolor=color+"22" if current == name else "transparent", border=ft.Border.all(1,color+"44" if current == name else "#1e293b"), border_radius=8, padding=ft.Padding.symmetric(horizontal=10,vertical=4), on_click=lambda _,n=name:select(n),ink=True) for name,color in [("Attack","#34d399"),("Defense","#818cf8")] if self._live_section_allowed(name)],spacing=6,wrap=True)
 
     def _bb_action_tiles(self, log, width=None):
         groups = {
-            "Attack": [("SHORT_PASS","#22d3ee"),("LONG_PASS","#818cf8"),("DRIBBLE","#fbbf24"),("LAYUP","#34d399"),("SHOT","#818cf8"),("OREB","#c084fc")],
-            "Opposition": [("LAYUP_AGAINST","#f43f5e"),("SHOT_AGAINST","#f43f5e"),("BA","#f43f5e")],
-            "Defence": [("DREB","#818cf8"),("STL","#34d399"),("BLK","#38bdf8"),("DEFLECTION","#22d3ee"),("LOOSE","#c084fc")],
-            "Cards": [("TF","#fbbf24"),("UF","#fb923c"),("DF","#f43f5e")],
+            "Attack": [("SHOT","#818cf8"),("OREB","#c084fc")],
+            "Defense": [("DREB","#818cf8"),("STL","#34d399"),("PF","#fbbf24")],
+            # Compatibility with old saved view state.
+            "Defence": [("DREB","#818cf8"),("STL","#34d399"),("PF","#fbbf24")],
         }
         labels = {code:label for code,label,_ in ACTIONS}
-        tiles = [action_btn(labels[code], ft.Icons.SPORTS_BASKETBALL if code.endswith("MADE") else ft.Icons.STYLE if code in ("TF","UF","DF") else ft.Icons.SPORTS, color,lambda _,c=code:log(c),width=width) for code,color in groups.get(getattr(self,"_bb_category","Attack"),groups["Attack"]) if self._live_allows_key(code)]
+        tiles = [action_btn("Foul" if code=="PF" else labels[code], ft.Icons.SPORTS_BASKETBALL if code.endswith("MADE") else ft.Icons.STYLE if code in ("TF","UF","DF") else ft.Icons.SPORTS, color,lambda _,c=code:log(c),width=width) for code,color in groups.get(getattr(self,"_bb_category","Attack"),groups["Attack"]) if self._live_allows_key(code)]
         category = getattr(self, "_bb_category", "Attack")
-        if category in ("Attack", "Opposition") and self._live_allows_key("SHOT" if category=="Attack" else "SHOT_AGAINST"):
-            tiles.append(action_btn("Conversion", ft.Icons.CHECK_CIRCLE, "#f43f5e" if category == "Opposition" else "#34d399", self._bb_open_conversion, disabled=self._bb_conversion_event() is None, width=width))
-        if category in ("Attack", "Opposition") and self._live_allows_key("PENALTY_ATTACK" if category=="Attack" else "PENALTY_OPPOSITION"):
-            tiles.append(self._bb_penalty_button(category.lower(), width))
+        if category == "Attack" and self._live_allows_key("SHOT"):
+            tiles.append(action_btn("Conversion", ft.Icons.CHECK_CIRCLE, "#34d399", self._bb_open_conversion, disabled=self._bb_conversion_event() is None, width=width))
         return tiles
 
     def _bb_conversion_event(self):
@@ -250,13 +249,12 @@ class BasketballMixin:
     def _bb_incompletes(self, vertical=False):
         last = self._bb_last_completable()
         code = last.event_type.removeprefix("BB_") if last else None
-        labels = {"LAYUP_AGAINST":"Layup against", "SHORT_PASS":"Short pass", "LONG_PASS":"Long pass", "DRIBBLE":"Dribble", "LAYUP":"Layup", "SHOT":"Shot", "SHOT_AGAINST":"Shot against", "2_MADE":"2-point shot", "3_MADE":"3-point shot", "FT_MADE":"Free throw", "STL":"Steal", "BLK":"Block", "OREB":"Off. rebound", "DREB":"Def. rebound", "DEFLECTION":"Deflection", "LOOSE":"Loose ball"}
+        labels = {"SHOT":"Shot", "2_MADE":"2-point shot", "3_MADE":"3-point shot", "FT_MADE":"Free throw", "STL":"Steal", "OREB":"Off. rebound", "DREB":"Def. rebound"}
         labels = {k:v for k,v in labels.items() if k not in ("2_MADE","3_MADE","FT_MADE") or code == k}
         groups = {
-            "Attack": {"SHORT_PASS","LONG_PASS","DRIBBLE","LAYUP","SHOT","OREB","2_MADE","3_MADE","FT_MADE"},
-            "Defence": {"STL","BLK","DREB","DEFLECTION","LOOSE"},
-            "Opposition": {"LAYUP_AGAINST","SHOT_AGAINST"},
-            "Cards": set(),
+            "Attack": {"SHOT","OREB","2_MADE","3_MADE","FT_MADE"},
+            "Defense": {"STL","DREB"},
+            "Defence": {"STL","DREB"},
         }
         labels = {k:v for k,v in labels.items() if k in groups.get(getattr(self,"_bb_category","Attack"),set()) and self._live_allows_key(k)}
         tiles = [action_btn(label+" !",ft.Icons.CLOSE,"#f43f5e" if code==key else "#64748b",lambda _,k=key:self._bb_mark_incomplete(k),disabled=code!=key,width=150 if vertical else None) for key,label in labels.items()]
@@ -306,7 +304,6 @@ class BasketballMixin:
         compact = [ft.TextButton(label, on_click=handler, disabled=disabled or not self._live_controls('time'),
                     style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=8,vertical=4)))
             for label,handler,disabled in [
-                ("Turnover",lambda _:log("TO"),False),
                 ("Timeout",lambda _:log("TIMEOUT"),False),
                 ("Substitution",lambda _:log("SUBSTITUTION"),False),
                 ("Overtime",self._bb_overtime,m.period not in ("Q1","Q2","Q3","Q4")),
@@ -332,13 +329,10 @@ class BasketballMixin:
             ft.Divider(height=1,color=border),
             ft.TextButton("Dictionary",on_click=self._open_dictionary_dialog),
         ],spacing=6,scroll=ft.ScrollMode.AUTO,expand=True),230)
-        bottom = panel(ft.Column([ft.Row([
-            ft.Text("CARDS",size=9,color="#94a3b8"),
-            action_btn("Technical",ft.Icons.STYLE,"#fbbf24",lambda _:log("TF"),width=130),
-            action_btn("Unsportsmanlike",ft.Icons.STYLE,"#fb923c",lambda _:log("UF"),width=170),
-            action_btn("Disqualifying",ft.Icons.STYLE,"#f43f5e",lambda _:log("DF"),width=150),
-            ft.Button("Undo Last",icon=ft.Icons.UNDO,on_click=lambda _:self._undo_last_event()),
-        ],spacing=8,wrap=True), self._bb_sequence_panel()]))
+        bottom = panel(ft.Column([
+            ft.Row([ft.Button("Undo Last",icon=ft.Icons.UNDO,on_click=lambda _:self._undo_last_event())],spacing=8,wrap=True),
+            self._bb_sequence_panel(),
+        ]))
         video = ft.Container(content=ft.Stack([
             ft.Container(content=self._zoom_video_display_widget(),bgcolor="#020617",border=ft.Border.all(1,border),border_radius=12,alignment=ft.Alignment.CENTER,expand=True),
             ft.Container(content=ft.Text("LIVE" if self.camera_on else "OFF",size=10),padding=10),
