@@ -6,8 +6,8 @@ def _match_statistics(match):
         from hockey import statistics
         return statistics(match)
     if match.sport == 'BASKETBALL':
-        from basketball import summary, DEFINITIONS
-        return {key:(DEFINITIONS[key][0],value) for key,value in summary(match)['home']['team'].items() if key not in ('DD','TD','BENCH','PAINT','FASTBREAK','SECONDCHANCE','OFFTURNOVER','ADJUSTMENT','CHARGE','EFF','POSS','SHOTS_AGAINST','MISSES_AGAINST','UNRESOLVED_AGAINST','POINTS_AGAINST')}
+        from basketball import summary, DEFINITIONS, VISIBLE_STAT_KEYS
+        return {key:(DEFINITIONS[key][0],value) for key,value in summary(match)['home']['team'].items() if key in VISIBLE_STAT_KEYS}
     if match.sport == 'SOCCER':
         return {key:(key.removeprefix('home_').replace('_',' ').capitalize(),value) for key,value in match.stats.to_dict().items() if key.startswith('home_')}
     counts=Counter(e.event_type for e in match.events if e.team_id=='home')
