@@ -167,6 +167,12 @@ class PeerMixin:
         if self._live_active() and self._live_session.get('address')!='peer':self._snack('End the current sharing session before creating a new one.');return
         self._ensure_peer_link()
         self._peer_status=ft.Text('Use the same Wi-Fi, Feem, Zapya or hotspot. No internet is used for pairing or the shared match.')
+        feem_help=ft.Container(
+            content=ft.Column([
+                ft.Text('For offline sharing, connect each device to the same Wi-Fi or Feem hotspot. Feem is optional; it can help create a shared local network.'),
+                ft.TextButton('Get Feem',url='https://feem.io/en',icon=ft.Icons.OPEN_IN_NEW),
+            ],tight=True,spacing=4),
+            bgcolor='#142238',border=ft.Border.all(1,'#27364c'),border_radius=10,padding=12)
         codes=getattr(self,'_pairing_codes',{});self._pairing_codes=codes
         output=ft.TextField(label='Your connection code',value=codes.get('output',''),read_only=True,multiline=True,min_lines=2,max_lines=3,expand=True)
         incoming=ft.TextField(label='Paste the other device’s code',value=codes.get('incoming',''),multiline=True,min_lines=2,max_lines=3,on_change=lambda e:codes.update(incoming=e.control.value))
@@ -193,7 +199,7 @@ class PeerMixin:
                             try:await self._directory_join(address,identity)
                             except Exception as error:self._peer_message(str(error))
                         found.controls.append(ft.Row([ft.Text(row['name'],expand=True),ft.Button('Connect',on_click=connect)]))
-                self._peer_message('Choose a match; its host approves access.' if found.controls else 'No shared matches found. Keep the host open on the same network. Browsers may need local-network permission and the directory address shown by the installed app.')
+                self._peer_message('Choose a match; its host approves access.' if found.controls else 'No directory-hosted matches found. Allow local-network access and scan again. Browser-hosted matches can always be joined with an invitation/reply code; a browser tab cannot advertise itself as a Wi-Fi discovery server.')
             except Exception as error:self._peer_message(str(error))
             finally:scan_button.disabled=False;self.page.update()
         scan_button=ft.Button('Find shared matches',on_click=scan,disabled=self._live_active(),visible=not bool(self._database_user.get('hidden')))
@@ -238,10 +244,11 @@ class PeerMixin:
         self.page.show_dialog(ft.AlertDialog(title=ft.Text('Shared match'),scrollable=True,
             content=ft.Container(width=560,content=ft.Column([
                 ft.Text(('Before going offline, save the website for offline use and sign in. Keep this tab open. ' if self.is_web else 'Keep this app open. ')+'Host a match or choose one found on this network. Connection codes are available below if needed.'),
+                feem_help,
                 *([ft.TextButton('Save website for offline use',on_click=offline)] if self.is_web else []),
                 *([ft.Button('Device Wi-Fi link',on_click=self._open_wifi_point)] if not self.is_web else []),
                 *local_info,*self._local_sharing_controls(),
-                scan_button,found,ft.ExpansionTile(title=ft.Text('Browser / network connection'),controls=[helper,ft.Text('A Windows or Android app must keep its Shared match screen or Wi-Fi link running as the local directory. Browsers try common hotspot addresses; enter the displayed directory address for other networks.',size=12)]),
+                scan_button,found,ft.ExpansionTile(title=ft.Text('Browser / network connection'),controls=[helper,ft.Text('The browser scan checks common hotspot addresses for a Stat Tracker local directory. Allow the browser’s local-network prompt if shown. A normal browser tab cannot run that directory service itself, so use invitation/reply codes to join a browser-hosted match.',size=12)]),
                 self._peer_status,ft.Button('Host this match',on_click=host,disabled=not bool(self.match) or self._live_active()),
                 ft.ExpansionTile(title=ft.Text('Connection codes (fallback)'),controls=[ft.Button('Create invitation',on_click=offer,disabled=not bool(self.match) or (self._live_active() and not self._live_session['host'])),
                 ft.Row([output,ft.Button('Copy',icon=ft.Icons.CONTENT_COPY,tooltip='Copy connection code',on_click=copy_code)]),incoming,ft.Row([ft.Button('Join: create reply',on_click=answer),ft.Button('Host: accept reply',on_click=accept)],wrap=True),
