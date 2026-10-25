@@ -11,9 +11,9 @@ from shared_match import SharedMatch, SharedError, local_request, discover_match
 class LatestUpdates(unittest.TestCase):
     def test_stats_hide_retired_metrics_but_keep_zero_counts_and_rates(self):
         data=match_statistics(match())
-        for key in ('PAINT','FASTBREAK','SECONDCHANCE','OFFTURNOVER','BENCH','ADJUSTMENT','CHARGE','EFF','POSS','POINTS_AGAINST'):
+        for key in ('PAINT','FASTBREAK','SECONDCHANCE','OFFTURNOVER','BENCH','ADJUSTMENT','CHARGE','EFF','POSS','POINTS_AGAINST','LAYUPS','AST','TO','BLK','BA','DEFLECTION','LOOSE'):
             self.assertNotIn(key,data)
-        for key in ('PTS','LAYUPS','AST','FG%','2%','3%','FT%','3RATE','FTR','ORTG'):
+        for key in ('PTS','SHOTS','STL','OREB','DREB','REB','PF','FG%','2%','3%','FT%','TIMEOUT','OVERTIME','SUBSTITUTION','END_QUARTER','FULL_TIME'):
             self.assertIn(key,data)
         self.assertEqual(data['PTS'][1],0)
 
