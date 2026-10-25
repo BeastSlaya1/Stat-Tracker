@@ -28,7 +28,7 @@ class SCCBasketballTests(unittest.TestCase):
                 stats=summary(a.match)['home']['team']
                 self.assertEqual((stats['PTS'],stats['AST'],stats['SHOTS']),(points,int(assist),1))
                 self.assertEqual(stats['FTA']+stats['FGA'],1)
-                self.assertEqual(sequences(a.match.events)['players'],'#0 S^'+('A' if assist else '')+str(points))
+                self.assertEqual(sequences(a.match.events),{'players':[{'id':'0','jersey':'0','sequence':'S^'+('A' if assist else '')+str(points)}],'match':''})
                 self.assertIsNone(a._bb_conversion_event())
                 restored=Match.from_dict(a.match.to_dict())
                 self.assertEqual(summary(restored),summary(a.match))
@@ -66,7 +66,7 @@ class SCCBasketballTests(unittest.TestCase):
         self.assertIsNone(a._bb_conversion_event())
         stats=summary(a.match)['home']['team']
         self.assertEqual((stats['SHOTS'],stats['SHOT_MISSES'],stats['PTS']),(1,1,0))
-        self.assertEqual(sequences(a.match.events)['players'],'#0 S!')
+        self.assertEqual(sequences(a.match.events),{'players':[{'id':'0','jersey':'0','sequence':'S!'}],'match':''})
 
     def test_penalties_belong_to_scc_with_direction_and_preserve_scores(self):
         a=self.setup_app();a.match.home_score=5;a.match.away_score=4
@@ -77,7 +77,7 @@ class SCCBasketballTests(unittest.TestCase):
         self.assertEqual((stats['PENALTIES_WON'],stats['PENALTIES_GIVEN'],stats['FD'],stats['PF']),(1,1,1,1))
         self.assertEqual((a.match.home_score,a.match.away_score),(5,4))
         self.assertTrue(all(e.team_id=='home' for e in a.match.events))
-        self.assertEqual(sequences(a.match.events),{'players':''})
+        self.assertEqual(sequences(a.match.events),{'players':[],'match':''})
         a._update_score('away',2)
         self.assertEqual(a.match.away_score,6)
         self.assertEqual(a.match.events[-1].team_id,'home')
@@ -105,7 +105,7 @@ class SCCBasketballTests(unittest.TestCase):
                 stats=summary(a.match)['home']['team']
                 self.assertEqual((stats['SHOTS_AGAINST'],stats['POINTS_AGAINST']),(1,points))
                 self.assertEqual((stats['PTS'],stats['SHOTS'],stats['AST'],stats['FGA'],stats['FTA']),(0,0,0,0,0))
-                self.assertEqual(sequences(a.match.events)['players'],'')
+                self.assertEqual(sequences(a.match.events),{'players':[],'match':''})
                 self.assertTrue(all(e.team_id=='home' for e in a.match.events))
                 self.assertIsNone(a._bb_conversion_event())
                 restored=Match.from_dict(a.match.to_dict())
@@ -116,11 +116,11 @@ class SCCBasketballTests(unittest.TestCase):
                 a._undo_last_event()
                 self.assertEqual(a.match.away_score,5)
                 self.assertIsNone(a._bb_conversion_event())
-                self.assertEqual(sequences(a.match.events)['players'],'')
+                self.assertEqual(sequences(a.match.events),{'players':[],'match':''})
 
     def test_shot_against_incomplete_delete_and_invalidation(self):
         a=self.setup_app();a._bb_log('SHOT_AGAINST');a._bb_mark_incomplete('SHOT_AGAINST')
-        self.assertEqual(sequences(a.match.events)['players'],'')
+        self.assertEqual(sequences(a.match.events),{'players':[],'match':''})
         self.assertIsNone(a._bb_conversion_event())
         stats=summary(a.match)['home']['team']
         self.assertEqual((stats['SHOTS_AGAINST'],stats['MISSES_AGAINST'],stats['POINTS_AGAINST']),(1,1,0))
@@ -156,11 +156,11 @@ class SCCBasketballTests(unittest.TestCase):
     def test_layup_against_scores_and_incomplete_reverses_opponent_only(self):
         a=self.setup_app();a._bb_log('LAYUP_AGAINST')
         self.assertEqual((a.match.home_score,a.match.away_score),(0,2))
-        self.assertEqual(sequences(a.match.events)['players'],'')
+        self.assertEqual(sequences(a.match.events),{'players':[],'match':''})
         self.assertEqual(summary(a.match)['home']['team']['FGA'],0)
         a._bb_mark_incomplete('LAYUP_AGAINST')
         self.assertEqual((a.match.home_score,a.match.away_score),(0,0))
-        self.assertEqual(sequences(a.match.events)['players'],'')
+        self.assertEqual(sequences(a.match.events),{'players':[],'match':''})
         a._undo_last_event();self.assertEqual(a.match.away_score,2)
         restored=Match.from_dict(a.match.to_dict())
         self.assertEqual(summary(restored),summary(a.match))

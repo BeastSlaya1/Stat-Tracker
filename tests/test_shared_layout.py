@@ -17,7 +17,7 @@ class SharedLayoutTests(unittest.TestCase):
         self.assertEqual(sections[2].scroll,ft.ScrollMode.AUTO)
         self.assertTrue(sections[2].expand)
         text=[c.value for c in controls(sections[2]) if isinstance(c,ft.Text)]
-        self.assertIn('Player / jersey sequence',text)
+        self.assertIn('Player sequences',text)
         self.assertIn('Incompletes',text)
         self.assertFalse(any(isinstance(c,ft.GridView) for c in controls(sections[2])))
         for control in controls(tree):

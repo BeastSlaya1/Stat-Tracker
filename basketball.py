@@ -303,7 +303,11 @@ def report(match):
     for player in summary(match)['home']['players'].values():
         lines += ["", "JERSEY " + player['name']]
         lines += [f"{DEFINITIONS[k][0]}: {display(player['stats'][k])}" for k in ('PTS','SHOTS','SHOT_MISSES','UNRESOLVED','2M','2A','3M','3A','FTM','FTA','FGM','FGA','REB','STL','BLK','PF','FG%','FT%','2%','3%')]
-    lines += ["", "PLAYER / JERSEY SEQUENCE", sequences(match.events)["players"] or "—"]
+    sequence_data = sequences(match.events)
+    lines += ["", "PLAYER SEQUENCES"]
+    lines += [f"#{item['jersey']}: {item['sequence']}" for item in sequence_data["players"]] or ["—"]
+    if sequence_data["match"]:
+        lines += ["MATCH SEQUENCE", sequence_data["match"]]
     lines += ["", "EVENTS"] + [f"{e.basketball.get('period', '')} {e.minute}:{e.second:02d} {e.team_id}: {e.player_name} — {e.description}" for e in match.events]
     lines += ["", "=== STAT_TRACKER_MATCH_DATA_START ===", json.dumps(match.to_dict(), indent=2), "=== STAT_TRACKER_MATCH_DATA_END ==="]
     return "\n".join(lines)
@@ -312,14 +316,23 @@ def report(match):
 PENALTY_TYPES = [("FT", "Free throw"), ("PF", "Personal foul"), ("SHOOTING", "Shooting foul"), ("OFFENSIVE", "Offensive foul / charge"), ("BLOCKING", "Blocking foul"), ("HOLDING", "Holding foul"), ("TF", "Technical foul"), ("UF", "Unsportsmanlike foul"), ("DF", "Disqualifying foul"), ("TEAM", "Team-foul penalty"), ("VIOLATION", "Violation"), ("OTHER", "Other penalty")]
 
 def sequences(events):
-    """One chronological sequence with player actions attributed by jersey."""
+    """Return one chronological stat sequence for each basketball player."""
     symbols = {
         "SHOT": "S", "SHOT_MISSED": "S!", "STL": "St", "BLK": "B",
         "REBOUND": "R", "PF": "F",
-        "OVERTIME": "[OVER]", "TO": "[TURN]", "TIMEOUT": "[STOP]",
-        "SUBSTITUTION": "[SUB]", "END_QUARTER": "[TIME]", "FULL_TIME": "[END]",
+        "TO": "[TURN]", "TIMEOUT": "[STOP]", "OVERTIME": "[OVER]",
+        "END_QUARTER": "[TIME]", "FULL_TIME": "[END]",
     }
-    entries = []
+    player_rows = {}
+    match_entries = []
+
+    def add_player_event(player_id, jersey, token):
+        if jersey is None:
+            return
+        key = str(player_id or "jersey:" + str(jersey))
+        row = player_rows.setdefault(key, {"jersey": str(jersey), "events": []})
+        row["events"].append(token)
+
     for event in effective_events(events):
         if event.team_id != "home":
             continue
@@ -327,21 +340,29 @@ def sequences(events):
         details = event.basketball or {}
         if key in ("LINEUP", "LINEUP_PLAN", "ADJUSTMENT", "OPPONENT_SCORE"):
             continue
-        if key == "SHOT_AGAINST_MADE" or (key not in symbols and key not in ("2_MADE", "3_MADE", "FT_MADE")):
+        if key in ("TO", "TIMEOUT", "OVERTIME", "END_QUARTER", "FULL_TIME"):
+            match_entries.append(symbols[key])
+            continue
+        if key == "SHOT_AGAINST_MADE" or (key not in symbols and key not in ("2_MADE", "3_MADE", "FT_MADE", "SUBSTITUTION")):
             continue
         if key == "SUBSTITUTION":
-            leaving = details.get("player_out_jersey")
-            entering = details.get("player_in_jersey")
-            token = f"#{leaving}→#{entering} [SUB]" if leaving is not None and entering is not None else "[SUB]"
+            add_player_event(details.get("player_out_id"), details.get("player_out_jersey"), "[SUBOUT]")
+            add_player_event(details.get("player_in_id"), details.get("player_in_jersey"), "[SUBIN]")
+            if details.get("player_out_jersey") is None and details.get("player_in_jersey") is None:
+                match_entries.append("[SUB]")
+            continue
         elif details.get("shot_action"):
-            jersey = details.get("jersey")
-            player = f"#{jersey}" if jersey is not None else "Team"
-            token = player + " S^" + ("A" if details.get("assist") else "") + str(details.get("points", 0))
+            token = "S^" + ("A" if details.get("assist") else "") + str(details.get("points", 0))
         else:
             token = symbols.get(key, "")
-            if token and not token.startswith("["):
-                jersey = details.get("jersey")
-                token = f"#{jersey} {token}" if jersey is not None else f"Team {token}"
-        if token:
-            entries.append(token)
-    return {"players": " ".join(entries)}
+        jersey = details.get("jersey")
+        if jersey is None and isinstance(event.player_name, str) and event.player_name.startswith("#"):
+            jersey = event.player_name[1:]
+        if token and not token.startswith("["):
+            add_player_event(details.get("player_id"), jersey, token)
+        elif token == "[TURN]":
+            match_entries.append(token)
+    players = [{"id": identity, "jersey": row["jersey"], "sequence": " ".join(row["events"])}
+               for identity, row in player_rows.items()]
+    players.sort(key=lambda row: (not row["jersey"].isdigit(), int(row["jersey"]) if row["jersey"].isdigit() else row["jersey"]))
+    return {"players": players, "match": " ".join(match_entries)}

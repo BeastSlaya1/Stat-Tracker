@@ -29,7 +29,7 @@ BLK (Block): 0
 PF (Personal foul): 0
 TIMEOUT (Timeout): 0
 
-PLAYER / JERSEY SEQUENCE
+PLAYER SEQUENCES
 —
 
 EVENTS

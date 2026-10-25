@@ -311,10 +311,13 @@ class BasketballMixin:
             e = make_event(m, "home", "BB_CONVERSION", m.home_team.short_name, code)
             e.basketball = {**original.basketball, "target_id": original.id, "points": points, "assist": bool(assist.value), "assist_player_id": assister.value if assist.value and prefix == "S" else ""}
             m.events.append(e)
+            recalculate_stats(m)
+            self._save()
             self.page.pop_dialog()
-            self._bb_commit()
+            self._full_refresh()
+            scoring_team = m.home_team.short_name if prefix == "S" else m.away_team.short_name
+            self._snack(f"Conversion recorded — {scoring_team} +{points}")
         confirm.on_click = record
-        self._full_refresh()
         self.page.show_dialog(ft.AlertDialog(title=ft.Text("Shot against conversion" if prefix == "As" else "Shot conversion"), content=ft.Column([options, assist, assister, preview], tight=True), actions=[ft.TextButton("Cancel", on_click=lambda _:self.page.pop_dialog()), confirm]))
 
     def _bb_penalty_button(self, direction, width=None):
@@ -335,9 +338,13 @@ class BasketballMixin:
         return ft.PopupMenuButton(content=action_btn("Penalty", ft.Icons.FLAG, "#fbbf24", None, width=width), width=width, padding=0, tooltip="Awarded to SCC" if direction == "attack" else "Awarded against SCC", on_open=opened, on_cancel=lambda _:self._full_refresh(), items=[ft.PopupMenuItem(content=label, on_click=lambda _,c=code,l=label:record(c,l)) for code,label in PENALTY_TYPES])
 
     def _bb_sequence_panel(self):
-        value=sequences(self.match.events).get("players","")
-        return ft.Column([ft.Text("Player / jersey sequence",size=11,weight=ft.FontWeight.BOLD,color="#94a3b8"),
-            ft.Text(value or "—",size=11,selectable=True)],spacing=4)
+        data=sequences(self.match.events)
+        rows=[ft.Text("Player sequences",size=11,weight=ft.FontWeight.BOLD,color="#94a3b8")]
+        rows += [ft.Text(f"#{item['jersey']}: {item['sequence']}",size=11,selectable=True)
+                 for item in data["players"]]
+        if not data["players"]: rows.append(ft.Text("No player stats recorded yet.",size=11,color="#64748b"))
+        if data["match"]: rows.append(ft.Text("Match: "+data["match"],size=11,selectable=True))
+        return ft.Column(rows,spacing=4)
 
     def _bb_grid(self, tiles):
         available = max(200, self._layout_width() - 92)

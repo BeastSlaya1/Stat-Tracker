@@ -1626,7 +1626,7 @@ class StatTrackerApp(DirectoryMixin, WifiMixin, PlayerMixin, PeerMixin, HockeyMi
                 fouls_section,     # ⑥
                 cards_section,     # ⑦
                 time_section,      # ⑧
-                card(ft.Column([ft.Text(k.replace("defence","defense").title()+": "+(v or "—"),selectable=True,size=11) for k,v in generate_sequences(m.events,"home",m.sport).items()])),
+                card(self._bb_sequence_panel() if m.sport == "BASKETBALL" else ft.Column([ft.Text(k.replace("defence","defense").title()+": "+(v or "—"),selectable=True,size=11) for k,v in generate_sequences(m.events,"home",m.sport).items()])),
             ], spacing=8, scroll=ft.ScrollMode.AUTO, expand=True),
             # ft.Column has no bgcolor of its own — when its content is
             # shorter than the available height, the leftover space below
@@ -2223,12 +2223,15 @@ class StatTrackerApp(DirectoryMixin, WifiMixin, PlayerMixin, PeerMixin, HockeyMi
             on_click=lambda _: self._undo_last_event())
 
         seq_home = generate_sequences(m.events, "home", m.sport)
-        seq_text = ft.Column([
-            txt(f"ATTACK:  {seq_home['attack'] or '—'}", size=10, color=MUTED2, mono=True),
-            txt(f"DEFENSE: {seq_home['defence'] or '—'}", size=10, color=MUTED2, mono=True),
-            txt(f"CARDS:   {seq_home['cards'] or '—'}", size=10, color=MUTED2, mono=True),
-            txt(f"OPPOSITION: {seq_home['opposition'] or '—'}", size=10, color=ROSE, mono=True),
-        ], spacing=3)
+        if m.sport == "BASKETBALL":
+            seq_text = self._bb_sequence_panel()
+        else:
+            seq_text = ft.Column([
+                txt(f"ATTACK:  {seq_home['attack'] or '—'}", size=10, color=MUTED2, mono=True),
+                txt(f"DEFENSE: {seq_home['defence'] or '—'}", size=10, color=MUTED2, mono=True),
+                txt(f"CARDS:   {seq_home['cards'] or '—'}", size=10, color=MUTED2, mono=True),
+                txt(f"OPPOSITION: {seq_home['opposition'] or '—'}", size=10, color=ROSE, mono=True),
+            ], spacing=3)
 
         bottom_bar = ft.Container(
             content=ft.Column([

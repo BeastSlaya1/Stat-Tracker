@@ -32,7 +32,7 @@ class CoachTests(unittest.TestCase):
         events=[make_event(m,'home',code,'SCC',code) for code in ['TURNOVER','SUBSTITUTION','TIMEOUT','END_QUARTER','FULL_TIME']]
         self.assertEqual(generate_sequences(events,'home'),dict.fromkeys(('attack','defence','cards','opposition'),'[TURN] [SUB] [STOP] [TIME] [END]'))
         for e in events:e.event_type='BB_'+('TO' if e.event_type=='TURNOVER' else e.event_type)
-        self.assertEqual(sequences(events),{'players':'[TURN] [SUB] [STOP] [TIME] [END]'})
+        self.assertEqual(sequences(events),{'players':[],'match':'[TURN] [SUB] [STOP] [TIME] [END]'})
 
     def test_coach_account_requires_team_and_sport_controls(self):
         a=app();a._create_account_dialog()
@@ -67,7 +67,7 @@ class CoachTests(unittest.TestCase):
                 marker=make_event(m,'home','BB_TIMEOUT','SCC','timeout')
                 correction=make_event(m,'home','BB_INCOMPLETE','SCC','incomplete')
                 correction.basketball={'target_id':action.id}
-                self.assertEqual(sequences([action,marker,correction]),{'players':'[STOP]'})
+                self.assertEqual(sequences([action,marker,correction]),{'players':[],'match':'[STOP]'})
 
     def test_comparison_legend_and_radar_use_same_series(self):
         from coach_chart import comparison_chart, match_colors, radar_data, match_label
@@ -100,7 +100,7 @@ class CoachTests(unittest.TestCase):
                 self.assertEqual((m.minute,m.second),(0,0));self.assertFalse(a._timer_running)
                 self.assertEqual(m.events[0].basketball['period'],period)
                 self.assertEqual(m.events[0].event_type,'BB_END_QUARTER' if quarter<4 else 'BB_FULL_TIME')
-                if quarter==4:self.assertEqual(sequences(m.events),{'players':'[END]'})
+                if quarter==4:self.assertEqual(sequences(m.events),{'players':[],'match':'[END]'})
             for running in (True,False):
                 a=app();a._timer_lock=threading.Lock();m=match();m.period=f'Q{quarter}';m.minute=10;m.second=3
                 a.matches=[m];a.active_match_idx=0;a._timer_running=running;a._launch_timer_thread=Mock()
@@ -108,7 +108,7 @@ class CoachTests(unittest.TestCase):
                 self.assertEqual(m.period,f'OT{quarter}')
                 self.assertEqual((m.minute,m.second),(0,0));self.assertTrue(a._timer_running)
                 self.assertEqual(a._launch_timer_thread.call_count,0 if running else 1)
-                self.assertEqual(sequences(m.events),{'players':'[OVER]'})
+                self.assertEqual(sequences(m.events),{'players':[],'match':'[OVER]'})
                 a._bb_overtime();self.assertEqual(len(m.events),1)
 
     def test_timeout_pauses_and_sequence_suffixes_stay_attached(self):

@@ -257,7 +257,8 @@ def generate_sequences(events: list, team_id: str, sport=None) -> dict:
         return sequences([e for e in events if e.team_id == team_id])
     if any(e.event_type.startswith("BB_") for e in events):
         from basketball import sequences
-        return sequences([e for e in events if e.team_id == team_id])
+        data = sequences([e for e in events if e.team_id == team_id])
+        return {"players": data["players"], "match": data["match"]}
     ATTACK_MAP = {
         # Each action button press logs its own event and contributes its
         # own letter to the sequence. "Mark Incomplete" logs a *separate*
