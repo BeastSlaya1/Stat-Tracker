@@ -1,2 +1,0 @@
-flutter
-stc_camera_preview
