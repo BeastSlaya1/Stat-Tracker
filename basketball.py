@@ -90,6 +90,16 @@ DEFINITIONS.update({
     "+/-": ("Plus/minus (tracked)", "Team points minus opponent points while the player is in a recorded lineup. Includes score corrections recorded while on court."),
 })
 
+# Basketball's active box score is intentionally compact. Keep legacy event
+# definitions above so old match files still decode, but do not surface retired
+# measurements in current match views, comparisons, or exports.
+VISIBLE_STAT_KEYS = {
+    "PTS", "SHOTS", "SHOT_MISSES", "UNRESOLVED", "2M", "2A", "3M", "3A",
+    "FTM", "FTA", "FGM", "FGA", "2%", "3%", "FT%", "FG%",
+    "OREB", "DREB", "REB", "STL", "PF", "TIMEOUT", "OVERTIME",
+    "SUBSTITUTION", "END_QUARTER", "FULL_TIME",
+}
+
 
 def on_court(match, side):
     lineup = []
@@ -278,15 +288,14 @@ def display(value):
 
 
 def report(match):
-    from stat_policy import retired
     lines = ["STAT TRACKER — BASKETBALL", match.title, match.date, f"Score: {match.home_score} – {match.away_score}", "Only recorded events are counted. — means a rate or playing time cannot be calculated.", "Historical score carried forward: " + str(match.basketball_baseline or {})]
     for side, data in summary(match).items():
         if side != "home": continue
         lines += ["", getattr(match, side + "_team").name, "Period points: " + str(data["periods"])]
-        lines += [f"{k} ({DEFINITIONS[k][0]}): {display(v)}" for k in BASE if not retired(k) and k not in ("BENCH", "PAINT", "FASTBREAK", "SECONDCHANCE", "OFFTURNOVER") for v in [data["team"][k]]]
+        lines += [f"{k} ({DEFINITIONS[k][0]}): {display(data['team'][k])}" for k in BASE if k in VISIBLE_STAT_KEYS]
     for player in summary(match)['home']['players'].values():
         lines += ["", "JERSEY " + player['name']]
-        lines += [f"{DEFINITIONS[k][0]}: {display(player['stats'][k])}" for k in ('PTS','SHOTS','SHOT_MISSES','LAYUPS','LAYUP_MISSES','OREB','DREB','REB','AST','STL','BLK','DEFLECTION','LOOSE','TF','UF','DF','PENALTIES_WON','FG%','FT%','2%','3%')]
+        lines += [f"{DEFINITIONS[k][0]}: {display(player['stats'][k])}" for k in ('PTS','SHOTS','SHOT_MISSES','UNRESOLVED','2M','2A','3M','3A','FTM','FTA','FGM','FGA','OREB','DREB','REB','STL','PF','FG%','FT%','2%','3%')]
     lines += ["", "SCC SEQUENCES"] + [key.replace("defence", "defense").upper() + ": " + value for key, value in sequences(match.events).items()]
     lines += ["", "EVENTS"] + [f"{e.basketball.get('period', '')} {e.minute}:{e.second:02d} {e.team_id}: {e.player_name} — {e.description}" for e in match.events]
     lines += ["", "=== STAT_TRACKER_MATCH_DATA_START ===", json.dumps(match.to_dict(), indent=2), "=== STAT_TRACKER_MATCH_DATA_END ==="]
