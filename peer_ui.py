@@ -1,10 +1,25 @@
 """Offline browser/native pairing over WebRTC data channels; no signalling server."""
 import asyncio
+import base64
 import json
 import secrets
+import struct
+import zlib
 import flet as ft
+import qrcode
 from models import Match
 from shared_match import SharedMatch, SharedError, local_request
+
+
+def _connection_qr(code):
+    """Render an offline pairing code as a PNG data URL without Pillow."""
+    qr=qrcode.QRCode(border=4,error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=5)
+    qr.add_data(code);qr.make(fit=True)
+    matrix=qr.get_matrix();scale=5;size=len(matrix)*scale
+    raw=b''.join((b'\x00'+b''.join((b'\x00' if cell else b'\xff')*scale for cell in row))*scale for row in matrix)
+    def chunk(kind,body):return struct.pack('!I',len(body))+kind+body+struct.pack('!I',zlib.crc32(kind+body)&0xffffffff)
+    png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',size,size,8,0,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
+    return 'data:image/png;base64,'+base64.b64encode(png).decode('ascii')
 
 class PeerMixin:
     def _peer_active(self):
@@ -176,6 +191,14 @@ class PeerMixin:
         codes=getattr(self,'_pairing_codes',{});self._pairing_codes=codes
         output=ft.TextField(label='Your connection code',value=codes.get('output',''),read_only=True,multiline=True,min_lines=2,max_lines=3,expand=True)
         incoming=ft.TextField(label='Paste the other device’s code',value=codes.get('incoming',''),multiline=True,min_lines=2,max_lines=3,on_change=lambda e:codes.update(incoming=e.control.value))
+        def show_qr(_=None):
+            if not output.value:self._peer_message('Create an invitation or reply first.');return
+            try:image=_connection_qr(output.value)
+            except Exception:self._peer_message('This connection code is too large for a QR code. Copy the code instead.');return
+            self.page.show_dialog(ft.AlertDialog(title=ft.Text('Scan connection code'),content=ft.Column([
+                ft.Image(src=image,width=300,height=300,fit=ft.ImageFit.CONTAIN),
+                ft.Text('Scan with the other device’s camera, copy the decoded text, then paste it into the connection-code box.',size=12),
+            ],tight=True,horizontal_alignment=ft.CrossAxisAlignment.CENTER),actions=[ft.TextButton('Close',on_click=lambda _:self.page.pop_dialog())]))
         async def copy_code(_):
             if not output.value:self._peer_message('Create an invitation or reply first.');return
             try:
@@ -251,7 +274,7 @@ class PeerMixin:
                 scan_button,found,ft.ExpansionTile(title=ft.Text('Browser / network connection'),controls=[helper,ft.Text('The browser scan checks common hotspot addresses for a Stat Tracker local directory. Allow the browser’s local-network prompt if shown. A normal browser tab cannot run that directory service itself, so use invitation/reply codes to join a browser-hosted match.',size=12)]),
                 self._peer_status,ft.Button('Host this match',on_click=host,disabled=not bool(self.match) or self._live_active()),
                 ft.ExpansionTile(title=ft.Text('Connection codes (fallback)'),controls=[ft.Button('Create invitation',on_click=offer,disabled=not bool(self.match) or (self._live_active() and not self._live_session['host'])),
-                ft.Row([output,ft.Button('Copy',icon=ft.Icons.CONTENT_COPY,tooltip='Copy connection code',on_click=copy_code)]),incoming,ft.Row([ft.Button('Join: create reply',on_click=answer),ft.Button('Host: accept reply',on_click=accept)],wrap=True),
+                ft.Row([output,ft.Column([ft.Button('Copy',icon=ft.Icons.CONTENT_COPY,tooltip='Copy connection code',on_click=copy_code),ft.Button('Show QR',icon=ft.Icons.QR_CODE,tooltip='Show a QR code for this connection code',on_click=show_qr)],spacing=6)]),incoming,ft.Row([ft.Button('Join: create reply',on_click=answer),ft.Button('Host: accept reply',on_click=accept)],wrap=True),
                 ft.Text('Copy codes through a local messenger/file transfer or shared clipboard. Connection codes grant a pairing opportunity; only share them with the intended device. The host still approves access.',size=12)]),
                 *([ft.Divider(),ft.Text('Devices and controls'),*session_rows] if session_rows else [])
             ],tight=True)),actions=[*session_actions] if session_actions else [ft.TextButton('Close',on_click=lambda _:self.page.pop_dialog())]))
