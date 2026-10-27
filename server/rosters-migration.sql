@@ -1,1 +1,0 @@
-CREATE TABLE IF NOT EXISTS team_rosters (team_code TEXT NOT NULL, hidden INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, players TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(team_code,hidden));
