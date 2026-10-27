@@ -13,13 +13,34 @@ from shared_match import SharedMatch, SharedError, local_request
 
 def _connection_qr(code):
     """Render an offline pairing code as a PNG data URL without Pillow."""
+    packed=zlib.compress(code.encode('utf-8'),9)
+    payload='STCQ1.'+base64.urlsafe_b64encode(packed).decode('ascii').rstrip('=')
     qr=qrcode.QRCode(border=4,error_correction=qrcode.constants.ERROR_CORRECT_L,box_size=5)
-    qr.add_data(code);qr.make(fit=True)
+    qr.add_data(payload);qr.make(fit=True)
     matrix=qr.get_matrix();scale=5;size=len(matrix)*scale
     raw=b''.join((b'\x00'+b''.join((b'\x00' if cell else b'\xff')*scale for cell in row))*scale for row in matrix)
     def chunk(kind,body):return struct.pack('!I',len(body))+kind+body+struct.pack('!I',zlib.crc32(kind+body)&0xffffffff)
     png=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',size,size,8,0,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
     return 'data:image/png;base64,'+base64.b64encode(png).decode('ascii')
+
+
+def _decode_connection_qr(value):
+    """Expand a compact QR payload, or accept an older raw connection QR."""
+    value=(value or '').strip()
+    if value.startswith('STC1.'):
+        return value
+    if not value.startswith('STCQ1.'):
+        raise ValueError('That QR code is not a Stat Tracker connection code.')
+    encoded=value[6:]
+    packed=base64.urlsafe_b64decode(encoded+'='*((-len(encoded))%4))
+    inflater=zlib.decompressobj()
+    raw=inflater.decompress(packed,100001)
+    if len(raw)>100000 or not inflater.eof or inflater.unused_data:
+        raise ValueError('The QR connection code is invalid or too large.')
+    code=raw.decode('utf-8').strip()
+    if not code.startswith('STC1.'):
+        raise ValueError('That QR code does not contain a connection code.')
+    return code
 
 class PeerMixin:
     def _peer_active(self):
@@ -206,6 +227,23 @@ class PeerMixin:
                 await self._pairing_clipboard.set(output.value)
                 self._peer_message('Connection code copied.')
             except Exception:self._peer_message('Clipboard unavailable. Select and copy the whole code manually.')
+        async def on_qr_scan(event):
+            try:
+                data=json.loads(event.data or '{}')
+                incoming.value=_decode_connection_qr(data.get('code',''))
+                codes.update(incoming=incoming.value)
+                self.page.pop_dialog()
+                self._peer_message('QR scanned. Continue with Join or Accept reply.')
+                self.page.update()
+            except Exception as error:
+                self._peer_message(str(error))
+        def scan_qr(_=None):
+            from stc_camera_preview import StcQrScanner
+            scanner=StcQrScanner(on_event=on_qr_scan)
+            self.page.show_dialog(ft.AlertDialog(title=ft.Text('Scan connection QR code'),content=ft.Column([
+                ft.Text('Allow camera access and point it at the other device’s Stat Tracker QR code.',size=12),
+                ft.Container(width=360,height=420,content=scanner),
+            ],tight=True),actions=[ft.TextButton('Cancel',on_click=lambda _:self.page.pop_dialog())]))
         found=ft.Column(spacing=6)
         helper=ft.TextField(label='Local directory address (only if not found)',hint_text='192.168.137.1:8767',value=getattr(self,'_directory_hint',''),on_change=lambda e:setattr(self,'_directory_hint',e.control.value))
         async def scan(_=None):
@@ -274,7 +312,7 @@ class PeerMixin:
                 scan_button,found,ft.ExpansionTile(title=ft.Text('Browser / network connection'),controls=[helper,ft.Text('The browser scan checks common hotspot addresses for a Stat Tracker local directory. Allow the browser’s local-network prompt if shown. A normal browser tab cannot run that directory service itself, so use invitation/reply codes to join a browser-hosted match.',size=12)]),
                 self._peer_status,ft.Button('Host this match',on_click=host,disabled=not bool(self.match) or self._live_active()),
                 ft.ExpansionTile(title=ft.Text('Connection codes (fallback)'),controls=[ft.Button('Create invitation',on_click=offer,disabled=not bool(self.match) or (self._live_active() and not self._live_session['host'])),
-                ft.Row([output,ft.Column([ft.Button('Copy',icon=ft.Icons.CONTENT_COPY,tooltip='Copy connection code',on_click=copy_code),ft.Button('Show QR',icon=ft.Icons.QR_CODE,tooltip='Show a QR code for this connection code',on_click=show_qr)],spacing=6)]),incoming,ft.Row([ft.Button('Join: create reply',on_click=answer),ft.Button('Host: accept reply',on_click=accept)],wrap=True),
+                ft.Row([output,ft.Column([ft.Button('Copy',icon=ft.Icons.CONTENT_COPY,tooltip='Copy connection code',on_click=copy_code),ft.Button('Show QR',icon=ft.Icons.QR_CODE,tooltip='Show a QR code for this connection code',on_click=show_qr),ft.Button('Scan QR',icon=ft.Icons.QR_CODE,tooltip='Scan another device’s connection QR',on_click=scan_qr)],spacing=6)]),incoming,ft.Row([ft.Button('Join: create reply',on_click=answer),ft.Button('Host: accept reply',on_click=accept)],wrap=True),
                 ft.Text('Copy codes through a local messenger/file transfer or shared clipboard. Connection codes grant a pairing opportunity; only share them with the intended device. The host still approves access.',size=12)]),
                 *([ft.Divider(),ft.Text('Devices and controls'),*session_rows] if session_rows else [])
             ],tight=True)),actions=[*session_actions] if session_actions else [ft.TextButton('Close',on_click=lambda _:self.page.pop_dialog())]))

@@ -70,7 +70,7 @@ dependencies = [
 [tool.flet.ios.info]
 UISupportedInterfaceOrientations = ["UIInterfaceOrientationPortrait", "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"]
 "UISupportedInterfaceOrientations~ipad" = ["UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown", "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"]
-NSCameraUsageDescription = "Stat Tracker uses your camera to preview and stream a match to your paired device."
+NSCameraUsageDescription = "Stat Tracker uses your camera to preview and stream a match and scan pairing QR codes."
 NSLocalNetworkUsageDescription = "Stat Tracker connects to your paired camera or computer on the same Wi-Fi network."
 
 [tool.flet.ios.info.NSAppTransportSecurity]
