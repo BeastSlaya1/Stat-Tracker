@@ -1,0 +1,12 @@
+✔ staff authentication protects data, passwords are hashed, and logout revokes access (98.6816ms)
+✔ retries are idempotent and stale edits cannot overwrite another staff edit (80.2244ms)
+✔ unknown origins, excessive sign-in attempts and malformed records are rejected (397.7423ms)
+✔ roster roles, coach scope, history, visibility and conflicts (89.1783ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1063.9443
