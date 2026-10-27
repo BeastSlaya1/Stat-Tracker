@@ -1,0 +1,11 @@
+.........................................................................................................................................Executing <Task finished name='Task-107' coro=<JoinFlow.test_scan_connect_approve_opens_match_and_video_without_second_connect() done, defined at C:\Users\joshp\.codex\visualizations\2026\10\10\01a12694-63e0-7ec3-8884-e09ed9c2434e\stat-tracker\tests\test_shared_assignments.py:72> result=None created at C:\Users\joshp\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py:110> took 0.468 seconds
+.Executing <Task finished name='Task-113' coro=<JoinFlow.test_stream_only_join_waits_for_camera_start_and_has_no_logging_controls() done, defined at C:\Users\joshp\.codex\visualizations\2026\10\10\01a12694-63e0-7ec3-8884-e09ed9c2434e\stat-tracker\tests\test_shared_assignments.py:101> result=None created at C:\Users\joshp\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py:110> took 0.493 seconds
+...............Executing <Task finished name='Task-118' coro=<SharedUiIntegrationTests.test_host_and_guest_exchange_inputs_and_undo_without_losing_other_device() done, defined at C:\Users\joshp\.codex\visualizations\2026\10\10\01a12694-63e0-7ec3-8884-e09ed9c2434e\stat-tracker\tests\test_shared_layout.py:51> result=None created at C:\Users\joshp\AppData\Local\Programs\Python\Python314\Lib\asyncio\runners.py:110> took 0.591 seconds
+............................................
+----------------------------------------------------------------------
+Ran 197 tests in 9.733s
+
+OK
+Validated and packaged Stat-Tracker-Apple-ios-simulator.tar.gz
+Offline website prepared: 5 assets, version a57eba45850c84e46845
+[Storage-Web] Load failed: storage unavailable
